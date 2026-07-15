@@ -67,10 +67,13 @@ def find(
 
 
 def _check_permissions(values: list[str]) -> None:
+    # Guard against --data providing non-string values. The --permission flag path
+    # can only ever produce list[str], but --data can produce anything. Re-establish
+    # the type assumption before joining, else non-strings crash join().
     unknown = [v for v in values if v not in PERMISSIONS]
     if unknown:
         raise typer.BadParameter(
-            f"Unknown permission(s): {', '.join(unknown)}. "
+            f"Unknown permission(s): {', '.join(repr(v) for v in unknown)}. "
             f"Valid permissions: {', '.join(PERMISSIONS)}"
         )
 

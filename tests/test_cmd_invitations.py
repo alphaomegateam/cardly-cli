@@ -299,3 +299,47 @@ def test_invitations_create_data_permissions_must_be_list():
     assert result.exit_code == 2
     assert "permissions must be a list" in result.stderr
     assert not route.called
+
+
+@respx.mock
+def test_invitations_create_data_permissions_rejects_non_string_member():
+    route = respx.post("https://api.card.ly/v2/invitations").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":["administrator",123]}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "Unknown permission" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_invitations_create_data_permissions_rejects_nested_list():
+    route = respx.post("https://api.card.ly/v2/invitations").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":[["x"]]}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "Unknown permission" in result.stderr
+    assert not route.called

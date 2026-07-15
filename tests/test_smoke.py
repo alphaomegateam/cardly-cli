@@ -21,7 +21,7 @@ EXPECTED_GROUPS = [
 ]
 
 
-def test_help_lists_every_v0_1_group():
+def test_help_lists_every_group():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     for group in EXPECTED_GROUPS:

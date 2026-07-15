@@ -247,7 +247,7 @@ card, not a sign anything is wrong** — it's a heads-up, not an error, and the 
 still decides whether to accept the body.
 
 `art update` sends only the fields you pass, same as `contacts update` — see
-"Known-unverified" below.
+"Known-unverified" above.
 
 ## Users and invitations
 
