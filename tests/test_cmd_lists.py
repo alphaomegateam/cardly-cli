@@ -74,6 +74,51 @@ def test_lists_create_rejects_bad_field_type():
     assert "banana" in result.stderr
 
 
+def test_lists_create_rejects_empty_field_name():
+    result = runner.invoke(app, ["lists", "create", "--name", "X", "--field", ""], env=ENV)
+    assert result.exit_code == 2
+    assert "name must not be empty" in result.stderr or "must not be empty" in result.stderr
+
+
+def test_lists_create_rejects_field_with_empty_name_before_colon():
+    result = runner.invoke(app, ["lists", "create", "--name", "X", "--field", ":date"], env=ENV)
+    assert result.exit_code == 2
+    assert "name must not be empty" in result.stderr or "must not be empty" in result.stderr
+
+
+@respx.mock
+def test_lists_create_requires_name():
+    route = respx.post("https://api.card.ly/v2/contact-lists")
+    result = runner.invoke(app, ["lists", "create"], env=ENV)
+    assert result.exit_code == 2
+    assert "name" in result.stderr.lower()
+    assert route.called is False
+
+
+@respx.mock
+def test_lists_create_with_data_name_only():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"id": "L3", "name": "FromData"}))
+
+    route = respx.post("https://api.card.ly/v2/contact-lists").mock(side_effect=handler)
+    result = runner.invoke(
+        app,
+        [
+            "lists",
+            "create",
+            "--data",
+            '{"name":"FromData"}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    assert route.called is True
+    assert captured["body"]["name"] == "FromData"
+
+
 @respx.mock
 def test_lists_delete_requires_confirmation():
     route = respx.delete("https://api.card.ly/v2/contact-lists/L1").mock(

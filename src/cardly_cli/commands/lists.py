@@ -21,6 +21,8 @@ def _parse_list_fields(items: list[str]) -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
     for item in items:
         name, _, type_ = item.partition(":")
+        if not name.strip():
+            raise typer.BadParameter(f"--field name must not be empty, got {item!r}")
         type_ = type_ or "text"
         if type_ not in FIELD_TYPES:
             raise typer.BadParameter(
@@ -72,6 +74,8 @@ def create(
         body["name"] = name
     if description:
         body["description"] = description
+    if not body.get("name"):
+        raise typer.BadParameter("lists create requires --name (or a name in --data).")
     fields = _parse_list_fields(field)
     if fields:
         body["fields"] = fields
