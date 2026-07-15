@@ -145,10 +145,12 @@ def main(
 from cardly_cli.commands.echo import echo_app  # noqa: E402
 from cardly_cli.commands.configure import configure_app  # noqa: E402
 from cardly_cli.commands.account import account_app  # noqa: E402
+from cardly_cli.commands.orders import orders_app  # noqa: E402
 
 app.add_typer(echo_app, name="echo")
 app.add_typer(configure_app, name="configure")
 app.add_typer(account_app, name="account")
+app.add_typer(orders_app, name="orders")
 
 
 def run() -> None:
