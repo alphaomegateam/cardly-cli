@@ -18,10 +18,15 @@ def load_data(raw: str | None, *, stdin: TextIO | None = None) -> dict:
     try:
         if raw == "-":
             source = stdin or sys.stdin
-            return json.load(source)
-        if raw.startswith("@"):
-            return json.loads(Path(raw[1:]).read_text())
-        return json.loads(raw)
+            parsed = json.load(source)
+        elif raw.startswith("@"):
+            parsed = json.loads(Path(raw[1:]).read_text())
+        else:
+            parsed = json.loads(raw)
+
+        if not isinstance(parsed, dict):
+            raise typer.BadParameter(f"--data must be a JSON object, got {type(parsed).__name__}")
+        return parsed
     except (json.JSONDecodeError, OSError) as exc:
         raise typer.BadParameter(f"Invalid --data JSON: {exc}") from exc
 

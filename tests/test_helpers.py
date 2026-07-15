@@ -28,6 +28,38 @@ def test_load_data_bad_json_raises_bad_parameter():
         load_data("{nope")
 
 
+def test_load_data_inline_array_raises_bad_parameter():
+    with pytest.raises(typer.BadParameter, match="must be a JSON object, got list"):
+        load_data("[1, 2]")
+
+
+def test_load_data_inline_string_raises_bad_parameter():
+    with pytest.raises(typer.BadParameter, match="must be a JSON object, got str"):
+        load_data('"string"')
+
+
+def test_load_data_inline_number_raises_bad_parameter():
+    with pytest.raises(typer.BadParameter, match="must be a JSON object, got int"):
+        load_data("42")
+
+
+def test_load_data_stdin_array_raises_bad_parameter():
+    with pytest.raises(typer.BadParameter, match="must be a JSON object, got list"):
+        load_data("-", stdin=io.StringIO("[1, 2]"))
+
+
+def test_load_data_file_array_raises_bad_parameter(tmp_path):
+    path = tmp_path / "array.json"
+    path.write_text("[1, 2, 3]")
+    with pytest.raises(typer.BadParameter, match="must be a JSON object, got list"):
+        load_data(f"@{path}")
+
+
+def test_load_data_missing_file_raises_bad_parameter():
+    with pytest.raises(typer.BadParameter, match="Invalid --data JSON"):
+        load_data("@/nonexistent/file.json")
+
+
 def test_parse_fields():
     assert parse_fields(["a=1", "b=2"]) == {"a": "1", "b": "2"}
     assert parse_fields(["a=1", "a=2"]) == {"a": ["1", "2"]}
