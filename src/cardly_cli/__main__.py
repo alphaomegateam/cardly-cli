@@ -162,6 +162,10 @@ app.add_typer(webhooks_app, name="webhooks")
 app.add_typer(ref_app, name="ref")
 app.add_typer(art_app, name="art")
 
+from cardly_cli.commands import api as _api_cmd  # noqa: E402
+
+_api_cmd.register(app)
+
 
 def run() -> None:
     # Exit-code mapping happens in CardlyGroup.invoke (commands/_app.py, set via
