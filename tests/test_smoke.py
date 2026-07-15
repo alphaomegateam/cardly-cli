@@ -36,10 +36,17 @@ def test_every_group_help_renders():
         assert result.exit_code == 0, f"{group} --help failed"
 
 
-def test_v0_2_groups_are_absent():
-    # As of v0.2, users and invitations are now implemented.
-    # This test can be removed or repurposed for future v0.3 deferred groups.
-    pass
+def test_v0_2_surface_is_present():
+    result = runner.invoke(app, ["--help"])
+    assert "users" in result.stdout
+    assert "invitations" in result.stdout
+
+    for cmd in (
+        ["art", "upload", "--help"],
+        ["art", "update", "--help"],
+        ["art", "delete", "--help"],
+    ):
+        assert runner.invoke(app, cmd).exit_code == 0
 
 
 def test_deliberate_absences_stay_absent():

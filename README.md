@@ -177,10 +177,11 @@ the live API. Passing CI must not be read as having checked any of these:
   both cite the same worked example, so the example can't discriminate between them,
   and neither has been validated against a real postback. `webhooks verify` tries
   both and reports which matched.
-- **Pagination on `/contact-lists`, `/contact-lists/{id}/contacts`, and `/webhooks`.**
-  `limit`/`offset` are documented in prose but declared on no list endpoint in
-  Cardly's OpenAPI spec. We send them anyway and page defensively — advancing by the
-  returned page size, warning if the server clamps `limit`, and stopping if an
+- **Pagination on `/contact-lists`, `/contact-lists/{id}/contacts`, `/webhooks`,
+  `/users`, and `/invitations`.** `limit`/`offset` are documented in prose but
+  declared on no list endpoint in Cardly's OpenAPI spec — `GET /users` declares no
+  query parameters at all. We send them anyway and page defensively — advancing by
+  the returned page size, warning if the server clamps `limit`, and stopping if an
   endpoint appears to ignore `offset`.
 - **Whether credit-history accepts date-only filters.** We pad to midnight rather
   than find out in production.
@@ -198,6 +199,14 @@ the live API. Passing CI must not be read as having checked any of these:
   `application/json` because a working n8n integration uses it successfully — that's
   the only evidence we have, and it has not been verified directly against the live
   API here.
+- **Cardly's request-body size limit for artwork uploads.** Undocumented, and
+  unmeasured since the tests are fully mocked. Base64 inflates the payload by
+  exactly 4/3, so a 4-page 2 MB/page card becomes 10.67 MB encoded. The CLI warns
+  above 10 MB encoded and lets the API decide, rather than inventing a limit that
+  might reject a body Cardly would actually accept.
+- **Whether `art update` merges or replaces.** Same uncertainty as `contacts
+  update`: only the fields you pass are sent, and if Cardly replaces the record a
+  single-field edit would clear the rest.
 
 Issues and corrections very welcome.
 
@@ -212,11 +221,43 @@ These are facts about the API, not gaps:
 - **No gift-card flag** — gift cards attach by selecting a template that contains
   one. There's no API to mint or choose one ad hoc.
 - **No `PUT`** — Cardly uses `POST` for updates throughout.
+- **`invitations list` hides accepted invitations by default** — pass
+  `--include-accepted` to see them. This is Cardly's behaviour, not ours.
 
-## Coming in v0.2
+## Uploading artwork
 
-`users`, `invitations`, and `art upload/update/delete`. All reachable today via
-`cardly api`.
+Artwork needs a **media** UUID (the card stock it prints on). List your options first:
+
+```bash
+cardly ref media                       # pick the UUID you want
+cardly art upload --media <uuid> --name "Thank you" \
+  --artwork front.png --artwork inside.png
+```
+
+Bare `--artwork` paths are numbered from 1 in order; page 1 is the front. Use
+`--artwork 3=back.png` to set a page explicitly.
+
+Images are base64-encoded into a JSON body — Cardly does not accept multipart
+uploads. Base64 inflates the payload by exactly a third (4/3), so a 4-page card at
+2 MB per page becomes ~10.7 MB on the wire. Measured: a 1-page (2 MB) or 2-page
+(2 MB/page) card stays under 10 MB encoded and prints no warning; a 4-page card
+(2 MB/page, 10.67 MB encoded) or a 4-page hi-res card (5 MB/page, 26.67 MB encoded)
+does. The CLI warns above 10 MB encoded; **that warning is expected on a 4-page
+card, not a sign anything is wrong** — it's a heads-up, not an error, and the API
+still decides whether to accept the body.
+
+`art update` sends only the fields you pass, same as `contacts update` — see
+"Known-unverified" below.
+
+## Users and invitations
+
+`invitations list` hides accepted invitations by default — that's Cardly's
+behaviour, not ours. Pass `--include-accepted` to see them:
+
+```bash
+cardly users list
+cardly invitations list --include-accepted
+```
 
 ## Development
 

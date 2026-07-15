@@ -47,13 +47,6 @@ def test_art_get_accepts_a_slug():
     assert json.loads(result.stdout)["slug"] == "happy-birthday"
 
 
-def test_art_upload_is_not_in_v0_1():
-    # Deferred to v0.2: POST /art is application/json with base64-embedded
-    # images, which needs its own task and a body-size measurement.
-    result = runner.invoke(app, ["art", "upload", "x.png"], env=ENV)
-    assert result.exit_code != 0
-
-
 @respx.mock
 def test_art_upload_sends_media_name_and_base64_pages(tmp_path):
     import base64
