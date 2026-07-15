@@ -27,11 +27,6 @@ def _parse_message_pages(messages: list[str], message_pages: list[str]) -> list[
     return pages
 
 
-def _typed_int(values: dict[str, Any], key: str) -> Any:
-    raw = values.get(key)
-    return int(raw) if raw is not None else None
-
-
 def _upgrade_preview_urls(payload: Any) -> Any:
     """Force preview URLs to https.
 
@@ -43,10 +38,52 @@ def _upgrade_preview_urls(payload: Any) -> Any:
     preview = payload.get("preview")
     if isinstance(preview, dict) and isinstance(preview.get("urls"), dict):
         preview["urls"] = {
-            key: (value.replace("http://", "https://", 1) if isinstance(value, str) else value)
+            key: (
+                "https://" + value[len("http://") :]
+                if isinstance(value, str) and value.startswith("http://")
+                else value
+            )
             for key, value in preview["urls"].items()
         }
     return payload
+
+
+CARD_SHAPING_FLAGS_HELP = (
+    "--data carrying lines[] cannot be combined with card-shaping flags "
+    "(--artwork, --to-*, --message, ...); use one or the other."
+)
+
+
+def _card_shaping_flags_present(
+    *,
+    artwork: Any,
+    template: Any,
+    quantity: Any,
+    to: dict[str, Any],
+    frm: dict[str, Any],
+    messages: list[str],
+    message_pages: list[str],
+    variables: list[str],
+    style: list[str],
+    shipping: Any,
+    ship_to_me: Any,
+    requested_arrival: Any,
+) -> bool:
+    """True if any card-shaping flag was set.
+
+    `--purchase-order-number` is deliberately excluded — it's a top-level
+    field, not part of the card, and may accompany `--data` lines[].
+    """
+    if any(value is not None for value in (to.values())) or any(
+        value is not None for value in frm.values()
+    ):
+        return True
+    if messages or message_pages or variables or style:
+        return True
+    return any(
+        value is not None
+        for value in (artwork, template, quantity, shipping, ship_to_me, requested_arrival)
+    )
 
 
 def _warn_test_mode(state: Any, payload: Any) -> None:
@@ -73,8 +110,7 @@ def _build(
     requested_arrival,
     data,
 ) -> dict[str, Any]:
-    check_shipping(shipping, to.get("country"))
-    return build_line(
+    line = build_line(
         artwork=artwork,
         template=template,
         quantity=quantity,
@@ -88,6 +124,10 @@ def _build(
         requested_arrival=requested_arrival,
         data=data,
     )
+    # Gate on the MERGED line, not the flag dict — country may come from
+    # --data (e.g. {"recipient": {"country": "GB"}}) rather than --to-country.
+    check_shipping(shipping, (line.get("recipient") or {}).get("country"))
+    return line
 
 
 ARTWORK = typer.Option(None, "--artwork", help="Artwork UUID or slug, e.g. happy-birthday.")
@@ -157,38 +197,62 @@ def place(
     state = ctx.obj
     if shipping and shipping not in SHIPPING_METHODS:
         raise typer.BadParameter(f"--shipping must be one of {', '.join(SHIPPING_METHODS)}")
+    to = _recipient(
+        firstName=to_first_name,
+        lastName=to_last_name,
+        company=to_company,
+        address=to_address,
+        address2=to_address2,
+        city=to_city,
+        region=to_region,
+        postcode=to_postcode,
+        country=to_country,
+    )
+    frm = _recipient(
+        firstName=from_first_name,
+        lastName=from_last_name,
+        company=from_company,
+        address=from_address,
+        address2=from_address2,
+        city=from_city,
+        region=from_region,
+        postcode=from_postcode,
+        country=from_country,
+    )
     raw = load_data(data)
     # --data may carry a full {"lines": [...]} body; honour it as the base.
+    # Detect PRESENCE not truthiness: {"lines": []} must not silently fall
+    # through to a flag-built card below.
+    has_lines = "lines" in raw
     lines = raw.pop("lines", None)
-    if lines:
-        body: dict[str, Any] = {"lines": lines}
+    if has_lines and _card_shaping_flags_present(
+        artwork=artwork,
+        template=template,
+        quantity=quantity,
+        to=to,
+        frm=frm,
+        messages=message,
+        message_pages=message_page,
+        variables=var,
+        style=style,
+        shipping=shipping,
+        ship_to_me=ship_to_me,
+        requested_arrival=requested_arrival,
+    ):
+        raise typer.BadParameter(CARD_SHAPING_FLAGS_HELP)
+    if has_lines:
+        if not lines:
+            raise typer.BadParameter("--data lines[] must not be empty.")
+        # Preserve --data's other top-level keys (e.g. purchaseOrderNumber);
+        # the flag below still overrides a --data-supplied one.
+        body: dict[str, Any] = {**raw, "lines": lines}
     else:
         line = _build(
             artwork=artwork,
             template=template,
             quantity=quantity,
-            to=_recipient(
-                firstName=to_first_name,
-                lastName=to_last_name,
-                company=to_company,
-                address=to_address,
-                address2=to_address2,
-                city=to_city,
-                region=to_region,
-                postcode=to_postcode,
-                country=to_country,
-            ),
-            frm=_recipient(
-                firstName=from_first_name,
-                lastName=from_last_name,
-                company=from_company,
-                address=from_address,
-                address2=from_address2,
-                city=from_city,
-                region=from_region,
-                postcode=from_postcode,
-                country=from_country,
-            ),
+            to=to,
+            frm=frm,
             messages=message,
             message_pages=message_page,
             variables=var,
@@ -248,34 +312,40 @@ def preview(
     state = ctx.obj
     if shipping and shipping not in SHIPPING_METHODS:
         raise typer.BadParameter(f"--shipping must be one of {', '.join(SHIPPING_METHODS)}")
+    to = _recipient(
+        firstName=to_first_name,
+        lastName=to_last_name,
+        company=to_company,
+        address=to_address,
+        address2=to_address2,
+        city=to_city,
+        region=to_region,
+        postcode=to_postcode,
+        country=to_country,
+    )
+    frm = _recipient(
+        firstName=from_first_name,
+        lastName=from_last_name,
+        company=from_company,
+        address=from_address,
+        address2=from_address2,
+        city=from_city,
+        region=from_region,
+        postcode=from_postcode,
+        country=from_country,
+    )
     raw = load_data(data)
-    raw.pop("lines", None)  # preview takes ONE card, flat — never a lines[] wrap
-    body = _build(
+    # preview takes ONE card, flat — never a lines[] wrap. But `--data` carrying
+    # lines[] must be UNWRAPPED, not discarded (that would silently mail a
+    # different card than the one just previewed).
+    has_lines = "lines" in raw
+    lines = raw.pop("lines", None)
+    if has_lines and _card_shaping_flags_present(
         artwork=artwork,
         template=template,
         quantity=quantity,
-        to=_recipient(
-            firstName=to_first_name,
-            lastName=to_last_name,
-            company=to_company,
-            address=to_address,
-            address2=to_address2,
-            city=to_city,
-            region=to_region,
-            postcode=to_postcode,
-            country=to_country,
-        ),
-        frm=_recipient(
-            firstName=from_first_name,
-            lastName=from_last_name,
-            company=from_company,
-            address=from_address,
-            address2=from_address2,
-            city=from_city,
-            region=from_region,
-            postcode=from_postcode,
-            country=from_country,
-        ),
+        to=to,
+        frm=frm,
         messages=message,
         message_pages=message_page,
         variables=var,
@@ -283,14 +353,41 @@ def preview(
         shipping=shipping,
         ship_to_me=ship_to_me,
         requested_arrival=requested_arrival,
-        data=raw,
-    )
+    ):
+        raise typer.BadParameter(CARD_SHAPING_FLAGS_HELP)
+    if has_lines:
+        if len(lines) != 1:
+            raise typer.BadParameter(
+                "preview takes a single card; --data lines[] must contain exactly "
+                f"one element (got {len(lines)})."
+            )
+        body: dict[str, Any] = lines[0]
+    else:
+        body = _build(
+            artwork=artwork,
+            template=template,
+            quantity=quantity,
+            to=to,
+            frm=frm,
+            messages=message,
+            message_pages=message_page,
+            variables=var,
+            style=style,
+            shipping=shipping,
+            ship_to_me=ship_to_me,
+            requested_arrival=requested_arrival,
+            data=raw,
+        )
     client = state.client()
     result = _upgrade_preview_urls(client.post("orders/preview", json=body))
     _warn_test_mode(state, result)
+    # Emit BEFORE attempting the download — a failed download must not swallow
+    # creditCost and the preview URLs the caller already paid to generate.
+    state.emit(result)
 
     if download:
-        url = (result.get("preview") or {}).get("urls", {}).get("card")
+        preview_obj = result.get("preview") if isinstance(result, dict) else None
+        url = (preview_obj.get("urls") or {}).get("card") if isinstance(preview_obj, dict) else None
         if not url:
             raise typer.BadParameter("Preview response carried no card URL to download.")
         # Preview URLs expire (preview.expires) and are NOT pre-signed CDN
@@ -299,8 +396,6 @@ def preview(
         response = client.request("GET", url, raw=True)
         download.write_bytes(response.content)
         state.warn(f"Wrote proof PDF to {download}")
-
-    state.emit(result)
 
 
 @orders_app.command("get")

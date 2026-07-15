@@ -156,13 +156,22 @@ def test_message_page_flag_controls_ordering():
     assert pages == [{"page": 1, "text": "Front"}, {"page": 3, "text": "Back"}]
 
 
+@respx.mock
 def test_partial_sender_fails_locally_without_a_request():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
     result = runner.invoke(app, ["orders", "place", *TO, "--from-first-name", "Bob"], env=ENV)
     assert result.exit_code == 2  # Typer usage error
     assert "sender" in result.stderr.lower()
+    assert not route.called
 
 
+@respx.mock
 def test_tracked_shipping_outside_australia_fails_locally():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
     args = [
         "--artwork",
         "a",
@@ -180,6 +189,22 @@ def test_tracked_shipping_outside_australia_fails_locally():
     result = runner.invoke(app, ["orders", "place", *args], env=ENV)
     assert result.exit_code == 2
     assert "tracked" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_tracked_shipping_from_data_country_fails_locally():
+    """check_shipping must gate on the MERGED line, not the flag dict."""
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"recipient": {"country": "GB"}})
+    result = runner.invoke(
+        app, ["orders", "place", "--shipping", "tracked", "--data", body], env=ENV
+    )
+    assert result.exit_code == 2
+    assert "tracked" in result.stderr
+    assert not route.called
 
 
 @respx.mock
@@ -230,6 +255,138 @@ def test_place_accepts_data_body():
 
 
 @respx.mock
+def test_place_data_lines_with_card_shaping_flag_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"lines": [{"artwork": "from-data"}]})
+    result = runner.invoke(
+        app, ["orders", "place", "--data", body, "--artwork", "conflict"], env=ENV
+    )
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_preview_data_lines_with_card_shaping_flag_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+    )
+    body = json.dumps({"lines": [{"artwork": "from-data"}]})
+    result = runner.invoke(app, ["orders", "preview", "--data", body, "--message", "Hi"], env=ENV)
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_place_data_lines_with_purchase_order_number_allowed():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"order": {"id": "1"}}))
+
+    respx.post("https://api.card.ly/v2/orders/place").mock(side_effect=handler)
+    body = json.dumps({"lines": [{"artwork": "from-data"}]})
+    result = runner.invoke(
+        app, ["orders", "place", "--data", body, "--purchase-order-number", "PO-1"], env=ENV
+    )
+    assert result.exit_code == 0
+    assert captured["body"]["purchaseOrderNumber"] == "PO-1"
+    assert captured["body"]["lines"][0]["artwork"] == "from-data"
+
+
+@respx.mock
+def test_place_preserves_other_top_level_data_keys():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"order": {"id": "1"}}))
+
+    respx.post("https://api.card.ly/v2/orders/place").mock(side_effect=handler)
+    body = json.dumps({"lines": [{"artwork": "from-data"}], "customField": "keep-me"})
+    result = runner.invoke(app, ["orders", "place", "--data", body], env=ENV)
+    assert result.exit_code == 0
+    assert captured["body"]["customField"] == "keep-me"
+
+
+@respx.mock
+def test_place_data_empty_lines_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"lines": []})
+    result = runner.invoke(app, ["orders", "place", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_preview_data_lines_single_element_previews_that_card():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+
+    respx.post("https://api.card.ly/v2/orders/preview").mock(side_effect=handler)
+    body = json.dumps({"lines": [{"artwork": "from-data", "recipient": {"firstName": "Z"}}]})
+    result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert result.exit_code == 0
+    assert captured["body"] == {"artwork": "from-data", "recipient": {"firstName": "Z"}}
+
+
+@respx.mock
+def test_preview_data_lines_multiple_elements_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+    )
+    body = json.dumps({"lines": [{"artwork": "a"}, {"artwork": "b"}]})
+    result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_preview_data_empty_lines_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+    )
+    body = json.dumps({"lines": []})
+    result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_data_only_produces_identical_card_from_preview_and_place():
+    """The regression that started this: same --data + no flags -> same card."""
+    bodies = {}
+
+    def place_handler(request):
+        bodies["place"] = json.loads(request.content)["lines"][0]
+        return httpx.Response(200, json=ok({"order": {"id": "1"}}))
+
+    def preview_handler(request):
+        bodies["preview"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+
+    respx.post("https://api.card.ly/v2/orders/place").mock(side_effect=place_handler)
+    respx.post("https://api.card.ly/v2/orders/preview").mock(side_effect=preview_handler)
+    body = json.dumps(
+        {"lines": [{"artwork": "from-data", "recipient": {"firstName": "Z", "country": "AU"}}]}
+    )
+    place_result = runner.invoke(app, ["orders", "place", "--data", body], env=ENV)
+    preview_result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert place_result.exit_code == 0
+    assert preview_result.exit_code == 0
+    assert bodies["place"] == bodies["preview"]
+
+
+@respx.mock
 def test_preview_upgrades_http_urls_to_https():
     respx.post("https://api.card.ly/v2/orders/preview").mock(
         return_value=httpx.Response(
@@ -267,6 +424,43 @@ def test_preview_download_fetches_pdf_with_api_key(tmp_path):
     # Preview PDFs live on api.card.ly, not a pre-signed CDN link, so the
     # API-Key header is required on the fetch too.
     assert pdf.calls.last.request.headers["API-Key"] == "k"
+
+
+@respx.mock
+def test_preview_download_with_none_body_raises_clean_error(tmp_path):
+    respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, content=b"null")
+    )
+    out = tmp_path / "proof.pdf"
+    result = runner.invoke(app, ["orders", "preview", *TO, "--download", str(out)], env=ENV)
+    assert result.exit_code == 2
+    assert "no card url" in result.stderr.lower()
+
+
+@respx.mock
+def test_preview_download_with_null_urls_raises_clean_error(tmp_path):
+    respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": None}}))
+    )
+    out = tmp_path / "proof.pdf"
+    result = runner.invoke(app, ["orders", "preview", *TO, "--download", str(out)], env=ENV)
+    assert result.exit_code == 2
+    assert "no card url" in result.stderr.lower()
+
+
+@respx.mock
+def test_preview_emits_result_before_failed_download(tmp_path):
+    """A failed download must not swallow creditCost and the preview URLs."""
+    respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": None}, "creditCost": 2}))
+    )
+    out = tmp_path / "proof.pdf"
+    result = runner.invoke(
+        app, ["--json", "orders", "preview", *TO, "--download", str(out)], env=ENV
+    )
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["creditCost"] == 2
 
 
 @respx.mock
