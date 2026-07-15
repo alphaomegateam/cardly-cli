@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 import typer
@@ -10,6 +11,15 @@ from cardly_cli.models.contact import Contact, build_contact
 from cardly_cli.pagination import DEFAULT_LIMIT, extract_results, paginate
 
 contacts_app = typer.Typer(help="Manage contacts within a contact list.")
+
+# Matches only a duplicate on the sync match keys (email/externalId), as
+# surfaced in the client's flattened validation detail (see
+# envelope.flatten_validation): "email: This contact already exists." A bare
+# "exist" substring check also fires on unrelated 422s like "list does not
+# exist" or "field does not exist", which would misdirect users toward `sync`.
+_DUPLICATE_MATCH_KEY_RE = re.compile(
+    r"\b(email|externalId)\s*:\s*[^;]*\balready exist", re.IGNORECASE
+)
 
 LIST_COLUMNS = ["id", "externalId", "firstName", "lastName", "email", "locality"]
 
@@ -79,7 +89,7 @@ def create(
     try:
         result = state.client().post(f"contact-lists/{list_id}/contacts", json=body)
     except CardlyError as exc:
-        if exc.status_code == 422 and "exist" in str(exc).lower():
+        if exc.status_code == 422 and _DUPLICATE_MATCH_KEY_RE.search(str(exc)):
             raise CardlyError(
                 f"{exc.format_message()} "
                 f"(Cardly rejects duplicates on externalId/email; use "
@@ -157,7 +167,13 @@ def update(
     field: list[str] = FIELD,
     data: Optional[str] = DATA,
 ) -> None:
-    """Update a contact. NOTE: Cardly uses POST here, not PUT/PATCH."""
+    """Update a contact. NOTE: Cardly uses POST here, not PUT/PATCH.
+
+    NOTE: only the fields you pass are sent. Whether Cardly merges them into the
+    existing contact or replaces the record is UNVERIFIED — if it replaces, a
+    single-field edit would clear the others. Pass the full contact until this is
+    confirmed against the live API.
+    """
     state = ctx.obj
     body = _body(
         _values(
@@ -176,6 +192,9 @@ def update(
         field,
         data,
     )
+    # NOTE: only the fields present in `body` are sent. Whether Cardly merges
+    # this into the existing contact or replaces the record is UNVERIFIED — a
+    # replace would silently wipe every field not passed here.
     result = state.client().post(f"contact-lists/{list_id}/contacts/{contact_id}", json=body)
     state.emit(Contact.model_validate(result))
 
@@ -247,9 +266,21 @@ def delete_all(
     data: Optional[str] = DATA,
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation."),
 ) -> None:
-    """Bulk-delete contacts by body (DELETE on the collection)."""
+    """Bulk-delete contacts by body (DELETE on the collection).
+
+    Requires --data describing which contacts to delete. Cardly's behaviour for
+    a bodyless bulk delete is unverified and could remove every contact in the
+    list, so an explicit filter body is mandatory here.
+    """
     state = ctx.obj
+    body = load_data(data)
+    if not body:
+        raise typer.BadParameter(
+            "delete-all requires --data describing which contacts to delete (Cardly's "
+            "behaviour for a bodyless bulk delete is unverified and could remove every "
+            "contact in the list). Use `cardly api DELETE contact-lists/<id>/contacts` "
+            "if you intend to send no body."
+        )
     if not yes:
         typer.confirm(f"Bulk-delete contacts from list {list_id}?", abort=True)
-    body = load_data(data) or None
     state.emit(state.client().request("DELETE", f"contact-lists/{list_id}/contacts", json=body))

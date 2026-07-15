@@ -94,6 +94,26 @@ def test_sync_accepts_email_as_match_key():
 
 
 @respx.mock
+def test_sync_accepts_match_key_supplied_only_via_data():
+    # The match-key check reads the merged body, so a key present only in
+    # --data (no --email/--external-id flag) must still satisfy it.
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"id": "c1"}))
+
+    respx.post(f"{BASE}/sync").mock(side_effect=handler)
+    result = runner.invoke(
+        app,
+        ["contacts", "sync", "L1", "--data", '{"email": "ada@example.com"}'],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    assert captured["body"]["email"] == "ada@example.com"
+
+
+@respx.mock
 def test_create_duplicate_error_points_at_sync():
     respx.post(BASE).mock(
         return_value=httpx.Response(
@@ -109,6 +129,26 @@ def test_create_duplicate_error_points_at_sync():
     )
     assert result.exit_code == 1
     assert "sync" in result.stderr.lower()
+
+
+@respx.mock
+def test_create_unrelated_422_does_not_mention_sync():
+    # Regression: a loose "exist" substring match would fire on this too and
+    # wrongly steer the user toward `sync` for a problem sync can't fix.
+    respx.post(BASE).mock(
+        return_value=httpx.Response(
+            422,
+            json={
+                "state": {"status": "ERROR", "messages": ["Validation failed."]},
+                "data": {"listId": "The contact list does not exist."},
+            },
+        )
+    )
+    result = runner.invoke(
+        app, ["--no-retry", "contacts", "create", "L1", "--email", "ada@example.com"], env=ENV
+    )
+    assert result.exit_code == 1
+    assert "sync" not in result.stderr.lower()
 
 
 @respx.mock
@@ -177,3 +217,27 @@ def test_delete_all_sends_body_to_collection():
     )
     assert result.exit_code == 0
     assert captured["body"] == {"externalIds": ["a", "b"]}
+
+
+@respx.mock
+def test_delete_all_requires_data():
+    # A bodyless bulk DELETE has unverified behaviour and could wipe the whole
+    # list; require an explicit --data body before any HTTP call is made.
+    route = respx.delete(BASE).mock(return_value=httpx.Response(200, json=ok({})))
+    result = runner.invoke(app, ["contacts", "delete-all", "L1", "--yes"], env=ENV)
+    assert result.exit_code == 2
+    assert "--data" in result.stderr
+    assert route.called is False
+
+
+@respx.mock
+def test_delete_all_requires_confirmation():
+    route = respx.delete(BASE).mock(return_value=httpx.Response(200, json=ok({})))
+    result = runner.invoke(
+        app,
+        ["contacts", "delete-all", "L1", "--data", '{"externalIds": ["a", "b"]}'],
+        input="n\n",
+        env=ENV,
+    )
+    assert result.exit_code != 0
+    assert route.called is False
