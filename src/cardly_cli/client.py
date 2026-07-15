@@ -85,8 +85,11 @@ class CardlyClient:
     def _headers_for(self, method: str, json: Any | None, target: str) -> dict[str, str]:
         headers: dict[str, str] = {}
         if json is not None:
-            # The docs' prose says `text/json`; the OpenAPI declares
-            # application/json, and that is what actually works.
+            # Cardly's prose docs say `text/json`; the OpenAPI schema declares
+            # `application/json`. The n8n integration sends `application/json`
+            # successfully, which is the only evidence we have — this has NOT
+            # been verified against the live API directly (see README's
+            # Known-unverified section, open question on Content-Type).
             headers["Content-Type"] = "application/json"
         if method.upper() == "POST":
             # POST only — Cardly ignores the header on other verbs.
@@ -149,8 +152,23 @@ class CardlyClient:
                     self._sleep(self._retry.delay_for(attempt))
                     attempt += 1
                     continue
+                attempts_made = attempt + 1
+                if method.upper() == "POST":
+                    # A POST timeout is uniquely dangerous: the request may
+                    # have reached Cardly and mailed the card before the
+                    # response was lost. The idempotency key is what makes a
+                    # retry safe, and it is otherwise never surfaced anywhere
+                    # (C1) — print it here, the one moment it matters.
+                    message = (
+                        f"Cardly POST {endpoint} timed out after {attempts_made} attempts. "
+                        f"The order MAY have been placed — check `cardly orders list` before "
+                        f"retrying. To retry safely, re-run with --idempotency-key "
+                        f"{self._idempotency_key}"
+                    )
+                else:
+                    message = f"Cardly {method.upper()} {endpoint} timed out"
                 raise CardlyError(
-                    f"Cardly {method.upper()} {endpoint} timed out",
+                    message,
                     status_code=None,
                     is_timeout=True,
                 ) from exc
@@ -215,11 +233,17 @@ class CardlyClient:
     ) -> None:
         if not self._verbose:
             return
-        # Method + URL + Request-Id only. NEVER headers: that would leak the
-        # API key into logs and bug reports.
+        # Method + URL + Request-Id + (POST only) Idempotency-Key. NEVER log
+        # headers wholesale: that would leak the API key into logs and bug
+        # reports. The idempotency key is logged explicitly and only it — it
+        # is a random UUID, not a secret, and surfacing it here is what lets
+        # `--verbose` answer "what key do I retry with" before a timeout ever
+        # happens (C1).
         line = f"{method.upper()} {target}"
         if request_id:
             line += f" (Request-Id: {request_id})"
+        if method.upper() == "POST":
+            line += f" (Idempotency-Key: {self._idempotency_key})"
         if note:
             line += f" [{note}]"
         print(line, file=sys.stderr)

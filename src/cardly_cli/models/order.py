@@ -95,11 +95,6 @@ class Order(CardlyModel):
     items: Optional[list[OrderItem]] = None
 
 
-class Preview(CardlyModel):
-    urls: Optional[Any] = None
-    expires: Optional[str] = None
-
-
 def build_address(values: dict[str, Any]) -> dict[str, Any]:
     """Build an ORDER address (uses `city`).
 
@@ -167,6 +162,21 @@ def check_shipping(method: str | None, country: str | None) -> None:
         )
 
 
+def _merge_nested(data_value: Any, typed_value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Deep-merge one nested address object: typed wins per-key over data's.
+
+    `data_value` is whatever --data supplied at this key (or anything else, if
+    it wasn't a dict). `typed_value` has already been through compact(), so it
+    only contains keys the caller actually set — a key typed left unset can
+    never clobber one --data supplied. Returns None when there is nothing to
+    merge (no data dict, no typed values), so the caller can leave the key
+    untouched rather than writing an empty object over nothing.
+    """
+    base = dict(data_value) if isinstance(data_value, dict) else {}
+    merged = {**base, **(typed_value or {})}
+    return merged or None
+
+
 def build_line(
     *,
     artwork: str | None,
@@ -195,7 +205,6 @@ def build_line(
             "artwork": artwork,
             "template": template,
             "quantity": quantity,
-            "recipient": built_recipient,
             "messages": build_messages(messages),
             "variables": variables,
             "style": style,
@@ -204,8 +213,17 @@ def build_line(
         }
     )
     line.update(typed)
-    if built_sender:
-        line["sender"] = built_sender
+    # recipient/sender are deep-merged rather than replaced wholesale (I1): a
+    # plain `line.update({"recipient": built_recipient})` would silently
+    # discard any --data recipient fields the typed flags don't cover (e.g.
+    # recipient.company), even though the resulting body stays structurally
+    # valid and ships without complaint.
+    recipient_merged = _merge_nested(line.get("recipient"), built_recipient)
+    if recipient_merged is not None:
+        line["recipient"] = recipient_merged
+    sender_merged = _merge_nested(line.get("sender"), built_sender)
+    if sender_merged is not None:
+        line["sender"] = sender_merged
     if ship_to_me is not None:
         # False is meaningful, so set it outside compact().
         line["shipToMe"] = ship_to_me

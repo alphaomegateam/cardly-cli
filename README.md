@@ -70,9 +70,15 @@ cardly api GET users
 `@file`, or `-` for stdin). A body carrying `lines[]` is treated as the complete
 request and is **mutually exclusive** with the card-shaping flags (`--artwork`,
 `--to-*`, `--message`, ...) — mixing the two errors rather than silently picking one.
+`place` sends `lines[]` as-is (it's already the shape the endpoint wants); `preview`
+takes a single flat card, so it **unwraps** a one-element `lines[]` rather than
+rejecting it — `--data lines[]` with more or fewer than one element is an error.
 
 Global flags: `--json`, `--jq`, `--quiet`, `--verbose`, `--no-color`, `--profile`,
-`--base-url`, `--no-retry`, `--max-retries`, `--idempotency-key`.
+`--api-key`, `--base-url`, `--config-path`, `--no-retry`, `--max-retries`,
+`--idempotency-key`.
+
+Environment variables: `CARDLY_API_KEY`, `CARDLY_BASE_URL`, `CARDLY_PROFILE`.
 
 ## Exit codes
 
@@ -98,6 +104,35 @@ that invocation's retries). Pin one with `--idempotency-key` for scripted retrie
 This is what makes retrying a timed-out `orders place` safe: if the order landed and
 only the response was lost, the replay returns the stored result rather than sending
 a second card.
+
+### If a POST times out
+
+If every retry attempt on a POST (e.g. `orders place`) times out, the CLI cannot tell
+you whether the card was mailed — only that the response never came back. It exits 7
+with a message like:
+
+```
+Error: Cardly POST orders/place timed out after 4 attempts. The order MAY have been
+placed — check `cardly orders list` before retrying. To retry safely, re-run with
+--idempotency-key <the-key-that-was-used>
+```
+
+Do this, in order:
+
+1. **Check first**: run `cardly orders list` (or `cardly orders get <id>` if you have
+   reason to guess an id) before doing anything else. If the order is there, you're
+   done — do not resend.
+2. **If you must retry**, re-run the exact same command with
+   `--idempotency-key <the-key-printed-above>`. Cardly will replay the stored result
+   from the original attempt instead of mailing a second card, if the first attempt
+   actually landed.
+3. **Never** just re-run the bare command. Each invocation mints a fresh
+   `Idempotency-Key` by default — a second invocation with no key pinned is a
+   genuinely new write, and if the first one landed, you now have two cards mailed
+   and two charges.
+
+Run with `--verbose` up front on anything that spends credit if you want the key
+logged as it's used, rather than only after a timeout.
 
 `contacts update` sends whatever fields you pass as a `POST` — it is documented and
 tested against the belief that this **merges** rather than replaces the contact.
@@ -158,6 +193,11 @@ the live API. Passing CI must not be read as having checked any of these:
 - **What a bodyless `contacts delete-all` does.** It could mean "delete every
   contact in the list." The CLI requires an explicit `--data` body rather than find
   out; `cardly api DELETE contact-lists/<id>/contacts` remains the escape hatch.
+- **Which `Content-Type` Cardly's live API actually wants.** Cardly's prose docs say
+  `text/json`; the OpenAPI schema says `application/json`. We send
+  `application/json` because a working n8n integration uses it successfully — that's
+  the only evidence we have, and it has not been verified directly against the live
+  API here.
 
 Issues and corrections very welcome.
 

@@ -17,7 +17,11 @@ def register(app: typer.Typer) -> None:
 
 def api_command(
     ctx: typer.Context,
-    method: str = typer.Argument(..., help="HTTP method: GET/POST/DELETE."),
+    method: str = typer.Argument(
+        ...,
+        help="HTTP method: GET/POST/DELETE. Cardly has no PUT, but this escape hatch does "
+        "not police verbs — anything else is passed through as-is.",
+    ),
     path: str = typer.Argument(..., help="Endpoint path, e.g. account/balance or orders/123."),
     param: list[str] = typer.Option(
         [], "--param", "-p", help="Query param key=value (repeatable)."
@@ -32,12 +36,13 @@ def api_command(
     state = ctx.obj
     params = parse_fields(param)
     body = load_data(data) or None
-    client = state.client()
 
     if all_pages:
         if method.upper() != "GET":
             raise typer.BadParameter("--all only supports GET (pagination is GET-only).")
+        client = state.client()
         state.emit(list(paginate(client, path, params=params, limit=limit, warn=state.warn)))
         return
 
+    client = state.client()
     state.emit(client.request(method.upper(), path, params=params, json=body))

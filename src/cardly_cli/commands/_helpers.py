@@ -9,7 +9,7 @@ import typer
 
 from cardly_cli.models.base import compact
 
-__all__ = ["apply_filters", "build_payload", "compact", "load_data", "parse_fields"]
+__all__ = ["apply_filters", "compact", "load_data", "parse_fields"]
 
 
 def load_data(raw: str | None, *, stdin: TextIO | None = None) -> dict:
@@ -77,16 +77,3 @@ def apply_filters(items: list[Any], filters: list[str]) -> list[Any]:
         return True
 
     return [item for item in items if matches(item)]
-
-
-def build_payload(typed: dict, data: dict, fields: dict | None = None) -> dict:
-    """Merge typed flags over a --data body. Precedence: fields > typed > data.
-
-    NOTE: unlike loxo-cli's build_payload, this returns an UNWRAPPED body.
-    Cardly's request bodies are top-level; there is no {"order": {...}}
-    resource-key envelope. Wrapping 422s every write.
-    """
-    merged: dict[str, Any] = dict(data)
-    merged.update({k: v for k, v in typed.items() if v is not None})
-    merged.update(fields or {})
-    return merged

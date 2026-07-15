@@ -5,7 +5,6 @@ import typer
 
 from cardly_cli.commands._helpers import (
     apply_filters,
-    build_payload,
     compact,
     load_data,
     parse_fields,
@@ -89,29 +88,3 @@ def test_compact_is_re_exported_from_models_base():
     from cardly_cli.models.base import compact as canonical
 
     assert compact is canonical
-
-
-def test_build_payload_returns_unwrapped_body():
-    # Cardly bodies are top-level. loxo wraps in a resource key; we must not.
-    out = build_payload({"artwork": "slug"}, {}, {})
-    assert out == {"artwork": "slug"}
-    assert "order" not in out
-
-
-def test_build_payload_precedence_typed_over_data():
-    out = build_payload({"artwork": "flag"}, {"artwork": "body", "quantity": 2}, {})
-    assert out == {"artwork": "flag", "quantity": 2}
-
-
-def test_build_payload_ignores_none_typed_values():
-    out = build_payload({"artwork": None, "quantity": 3}, {"artwork": "body"}, {})
-    assert out == {"artwork": "body", "quantity": 3}
-
-
-def test_build_payload_fields_win():
-    out = build_payload({"a": "typed"}, {"a": "data"}, {"a": "field"})
-    assert out == {"a": "field"}
-
-
-def test_build_payload_fields_optional():
-    assert build_payload({"a": 1}, {}) == {"a": 1}

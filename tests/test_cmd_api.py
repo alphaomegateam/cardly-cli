@@ -79,7 +79,15 @@ def test_api_all_paginates():
     assert json.loads(result.stdout) == [{"id": 1}, {"id": 2}]
 
 
+@respx.mock
 def test_api_all_rejects_non_get():
+    # I4: no @respx.mock previously meant this test would happily hit the real
+    # API if the local guard ever broke — the exact shape fixed twice
+    # elsewhere. Register the route and assert it's never called.
+    route = respx.post("https://api.card.ly/v2/orders").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
     result = runner.invoke(app, ["api", "POST", "orders", "--all"], env=ENV)
     assert result.exit_code == 2
     assert "GET" in result.stderr
+    assert not route.called

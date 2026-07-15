@@ -233,6 +233,57 @@ def test_post_timeout_is_retried_and_can_succeed():
 
 
 @respx.mock
+def test_post_timeout_exhausted_names_idempotency_key_flag_and_value():
+    # C1: the key is a fresh UUID per invocation and was never surfaced
+    # anywhere — not even under --verbose. On a POST timeout exhaustion this
+    # must tell the user how to retry safely, naming both the flag and the
+    # actual key value, plus warn that the card MAY have already mailed.
+    respx.post("https://api.card.ly/v2/orders/place").mock(
+        side_effect=httpx.ConnectTimeout("timed out")
+    )
+    with CardlyClient(
+        SETTINGS,
+        retry=RetryPolicy(max_retries=2, base_delay=0),
+        idempotency_key="fixed-key-abc",
+        sleep=lambda _: None,
+    ) as c:
+        with pytest.raises(CardlyError) as ei:
+            c.post("orders/place", json={"lines": []})
+    message = str(ei.value)
+    assert ei.value.is_timeout
+    assert ei.value.exit_code == 7
+    assert "MAY have been" in message
+    assert "cardly orders list" in message
+    assert "--idempotency-key" in message
+    assert "fixed-key-abc" in message
+
+
+@respx.mock
+def test_get_timeout_message_does_not_mention_idempotency_key():
+    # Only POST carries a key, so a GET timeout's message must not imply one
+    # exists to retry with.
+    respx.get("https://api.card.ly/v2/orders").mock(side_effect=httpx.ConnectTimeout("timed out"))
+    with CardlyClient(
+        SETTINGS, retry=RetryPolicy(max_retries=1, base_delay=0), sleep=lambda _: None
+    ) as c:
+        with pytest.raises(CardlyError) as ei:
+            c.get("orders")
+    assert "idempotency" not in str(ei.value).lower()
+
+
+@respx.mock
+def test_verbose_post_logs_idempotency_key(capsys):
+    respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    with CardlyClient(SETTINGS, verbose=True, retry=NO_RETRY, idempotency_key="verbose-key-1") as c:
+        c.post("orders/place", json={"lines": []})
+    err = capsys.readouterr().err
+    assert "verbose-key-1" in err
+    assert "test_key" not in err  # never log headers/API key
+
+
+@respx.mock
 def test_get_timeout_is_not_retried():
     route = respx.get("https://api.card.ly/v2/orders").mock(
         side_effect=httpx.ConnectTimeout("timed out")

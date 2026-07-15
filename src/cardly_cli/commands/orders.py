@@ -48,6 +48,23 @@ def _upgrade_preview_urls(payload: Any) -> Any:
     return payload
 
 
+def _pop_lines(raw: dict[str, Any]) -> tuple[bool, Any]:
+    """Pop `lines` from a --data body, validating its shape once for both commands.
+
+    `place` used to guard only `if not lines`, never checking the type, so a
+    non-list (e.g. `null` or a bare object) sailed through: `preview` crashed
+    with a raw TypeError/KeyError, and `place` shipped it straight to the
+    money endpoint (I2).
+    """
+    has_lines = "lines" in raw
+    lines = raw.pop("lines", None)
+    if has_lines and not isinstance(lines, list):
+        raise typer.BadParameter(
+            f"--data lines[] must be a JSON array, got {type(lines).__name__}."
+        )
+    return has_lines, lines
+
+
 CARD_SHAPING_FLAGS_HELP = (
     "--data carrying lines[] cannot be combined with card-shaping flags "
     "(--artwork, --to-*, --message, ...); use one or the other."
@@ -223,8 +240,7 @@ def place(
     # --data may carry a full {"lines": [...]} body; honour it as the base.
     # Detect PRESENCE not truthiness: {"lines": []} must not silently fall
     # through to a flag-built card below.
-    has_lines = "lines" in raw
-    lines = raw.pop("lines", None)
+    has_lines, lines = _pop_lines(raw)
     if has_lines and _card_shaping_flags_present(
         artwork=artwork,
         template=template,
@@ -338,8 +354,7 @@ def preview(
     # preview takes ONE card, flat — never a lines[] wrap. But `--data` carrying
     # lines[] must be UNWRAPPED, not discarded (that would silently mail a
     # different card than the one just previewed).
-    has_lines = "lines" in raw
-    lines = raw.pop("lines", None)
+    has_lines, lines = _pop_lines(raw)
     if has_lines and _card_shaping_flags_present(
         artwork=artwork,
         template=template,

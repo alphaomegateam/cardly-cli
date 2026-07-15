@@ -29,7 +29,7 @@ app = typer.Typer(
 @dataclass
 class AppState:
     profile: Optional[str]
-    api_key: Optional[str]
+    api_key: Optional[str] = field(repr=False)
     base_url: Optional[str]
     json_out: bool
     jq: Optional[str]
@@ -70,8 +70,14 @@ class AppState:
         # convention is set (https://no-color.org/), or when stdout is not a
         # TTY (piped/redirected). The explicit isatty check is needed because
         # Rich forces color on when FORCE_COLOR is set even into a pipe.
-        no_color = self.no_color or bool(os.environ.get("NO_COLOR")) or not sys.stdout.isatty()
-        return Console(no_color=no_color)
+        is_tty = sys.stdout.isatty()
+        no_color = self.no_color or bool(os.environ.get("NO_COLOR")) or not is_tty
+        # `no_color=True` alone isn't enough: Rich's `Console(no_color=True)`
+        # still emits bold/style ANSI codes under FORCE_COLOR, it just skips
+        # actual color codes. `force_terminal=False` is what makes the table
+        # path (output.py's non-JSON branch) as pipe-safe as the JSON path,
+        # which already avoids this by never routing through Rich at all.
+        return Console(no_color=no_color, force_terminal=None if is_tty else False)
 
     def warn(self, message: str) -> None:
         if not self.quiet:

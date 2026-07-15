@@ -464,6 +464,112 @@ def test_preview_emits_result_before_failed_download(tmp_path):
 
 
 @respx.mock
+def test_data_nested_recipient_field_survives_typed_flag_merge():
+    """I1: --data recipient fields the typed flags don't cover must survive.
+
+    A shallow `line.update(typed)` replaced the whole `recipient` object,
+    silently discarding --data's company even though the request stayed
+    structurally valid and shipped.
+    """
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"order": {"id": "1"}}))
+
+    respx.post("https://api.card.ly/v2/orders/place").mock(side_effect=handler)
+    body = json.dumps({"recipient": {"company": "Acme Corp"}})
+    result = runner.invoke(
+        app,
+        [
+            "orders",
+            "place",
+            "--data",
+            body,
+            "--to-first-name",
+            "Ada",
+            "--to-address",
+            "1 Main St",
+            "--to-city",
+            "Sydney",
+            "--to-country",
+            "AU",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    recipient = captured["body"]["lines"][0]["recipient"]
+    assert recipient["company"] == "Acme Corp"
+    assert recipient["firstName"] == "Ada"
+    assert recipient["city"] == "Sydney"
+
+
+@respx.mock
+def test_region_guard_fires_when_country_comes_only_from_data_alongside_to_flag():
+    """I1: the region guard must not be defeated by the shallow-merge bug.
+
+    Country lives only in --data; --to-first-name (a typed flag lacking a
+    country) must not clobber it out of the merged recipient.
+    """
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"recipient": {"country": "GB"}})
+    result = runner.invoke(
+        app,
+        ["orders", "place", "--data", body, "--to-first-name", "Ada", "--shipping", "tracked"],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "tracked" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_place_data_lines_null_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"lines": None})
+    result = runner.invoke(app, ["orders", "place", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_place_data_lines_non_list_object_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/place").mock(
+        return_value=httpx.Response(200, json=ok({"order": {"id": "1"}}))
+    )
+    body = json.dumps({"lines": {"artwork": "x"}})
+    result = runner.invoke(app, ["orders", "place", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_preview_data_lines_null_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+    )
+    body = json.dumps({"lines": None})
+    result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
+def test_preview_data_lines_non_list_object_raises_badparameter():
+    route = respx.post("https://api.card.ly/v2/orders/preview").mock(
+        return_value=httpx.Response(200, json=ok({"preview": {"urls": {}}}))
+    )
+    body = json.dumps({"lines": {"artwork": "x"}})
+    result = runner.invoke(app, ["orders", "preview", "--data", body], env=ENV)
+    assert result.exit_code == 2
+    assert not route.called
+
+
+@respx.mock
 def test_orders_list_extracts_results():
     respx.get("https://api.card.ly/v2/orders").mock(
         return_value=httpx.Response(
