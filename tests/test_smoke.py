@@ -12,6 +12,7 @@ EXPECTED_GROUPS = [
     "configure",
     "contacts",
     "echo",
+    "invitations",
     "lists",
     "orders",
     "ref",
@@ -36,10 +37,9 @@ def test_every_group_help_renders():
 
 
 def test_v0_2_groups_are_absent():
-    # invitations is deferred to v0.2; reachable today via `cardly api`.
-    # users is now implemented in v0.2; see test_every_group_help_renders.
-    result = runner.invoke(app, ["--help"])
-    assert "invitations" not in result.stdout
+    # As of v0.2, users and invitations are now implemented.
+    # This test can be removed or repurposed for future v0.3 deferred groups.
+    pass
 
 
 def test_deliberate_absences_stay_absent():
