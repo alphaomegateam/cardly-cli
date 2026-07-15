@@ -4,9 +4,11 @@ import os
 import shlex
 import subprocess
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
+
+import tomli_w
 
 from cardly_cli.errors import ConfigError
 
@@ -15,7 +17,7 @@ DEFAULT_BASE_URL = "https://api.card.ly/v2"
 
 @dataclass(frozen=True)
 class CardlySettings:
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
 
 
@@ -95,16 +97,7 @@ def list_profiles(*, config_path: Path | None = None) -> dict[str, dict]:
 
 
 def _dump_toml(config: dict[str, Any]) -> str:
-    lines: list[str] = []
-    if config.get("default_profile"):
-        lines.append(f'default_profile = "{config["default_profile"]}"')
-        lines.append("")
-    for name, data in config.get("profile", {}).items():
-        lines.append(f"[profile.{name}]")
-        for key, value in data.items():
-            lines.append(f'{key} = "{value}"')
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n"
+    return tomli_w.dumps(config)
 
 
 def write_profile(

@@ -1,3 +1,5 @@
+import tomllib
+
 import pytest
 
 from cardly_cli.config import (
@@ -58,11 +60,6 @@ def test_profile_selected_by_flag_and_env(config_path):
     assert s.api_key == "test_xyz"
 
 
-def test_api_key_cmd_shells_out(config_path):
-    s = load_settings(profile="sandbox", env={}, config_path=config_path)
-    assert s.api_key == "test_xyz"
-
-
 def test_api_key_cmd_failure_raises_config_error(tmp_path):
     path = tmp_path / "c.toml"
     path.write_text('[profile.p]\napi_key_cmd = "false"\n')
@@ -113,3 +110,32 @@ def test_write_profile_supports_api_key_cmd(tmp_path):
     path = tmp_path / "new.toml"
     write_profile("dev", api_key_cmd="printf zzz", make_default=True, config_path=path)
     assert load_settings(env={}, config_path=path).api_key == "zzz"
+
+
+def test_api_key_cmd_not_invoked_when_flag_or_env_wins(tmp_path):
+    # A profile whose api_key_cmd would fail loudly if it were ever executed.
+    path = tmp_path / "c.toml"
+    path.write_text('[profile.p]\napi_key_cmd = "false"\n')
+
+    s = load_settings(profile="p", api_key="flag", env={}, config_path=path)
+    assert s.api_key == "flag"
+
+    s = load_settings(profile="p", env={"CARDLY_API_KEY": "env"}, config_path=path)
+    assert s.api_key == "env"
+
+
+def test_write_profile_roundtrip_with_hostile_api_key_cmd(tmp_path):
+    path = tmp_path / "new.toml"
+    hostile = 'sh -c "echo test_xyz" \\ backslash'
+    write_profile("dev", api_key_cmd=hostile, make_default=True, config_path=path)
+
+    with path.open("rb") as fh:
+        config = tomllib.load(fh)
+    assert config["profile"]["dev"]["api_key_cmd"] == hostile
+
+
+def test_settings_repr_masks_api_key():
+    s = CardlySettings(api_key="super-secret", base_url="https://api.card.ly/v2")
+    r = repr(s)
+    assert "super-secret" not in r
+    assert "https://api.card.ly/v2" in r
