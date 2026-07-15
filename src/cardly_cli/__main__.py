@@ -143,8 +143,10 @@ def main(
 # Sub-app registration is appended by later tasks. Imports live at the bottom to
 # avoid circular imports; the E402 markers are intentional.
 from cardly_cli.commands.echo import echo_app  # noqa: E402
+from cardly_cli.commands.configure import configure_app  # noqa: E402
 
 app.add_typer(echo_app, name="echo")
+app.add_typer(configure_app, name="configure")
 
 
 def run() -> None:
