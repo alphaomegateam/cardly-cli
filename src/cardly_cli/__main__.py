@@ -157,6 +157,7 @@ from cardly_cli.commands.lists import lists_app  # noqa: E402
 from cardly_cli.commands.webhooks import webhooks_app  # noqa: E402
 from cardly_cli.commands.art import art_app  # noqa: E402
 from cardly_cli.commands.ref import ref_app  # noqa: E402
+from cardly_cli.commands.users import users_app  # noqa: E402
 
 app.add_typer(echo_app, name="echo")
 app.add_typer(configure_app, name="configure")
@@ -167,6 +168,7 @@ app.add_typer(lists_app, name="lists")
 app.add_typer(webhooks_app, name="webhooks")
 app.add_typer(ref_app, name="ref")
 app.add_typer(art_app, name="art")
+app.add_typer(users_app, name="users")
 
 from cardly_cli.commands import api as _api_cmd  # noqa: E402
 
