@@ -148,6 +148,7 @@ from cardly_cli.commands.account import account_app  # noqa: E402
 from cardly_cli.commands.orders import orders_app  # noqa: E402
 from cardly_cli.commands.contacts import contacts_app  # noqa: E402
 from cardly_cli.commands.lists import lists_app  # noqa: E402
+from cardly_cli.commands.webhooks import webhooks_app  # noqa: E402
 
 app.add_typer(echo_app, name="echo")
 app.add_typer(configure_app, name="configure")
@@ -155,6 +156,7 @@ app.add_typer(account_app, name="account")
 app.add_typer(orders_app, name="orders")
 app.add_typer(contacts_app, name="contacts")
 app.add_typer(lists_app, name="lists")
+app.add_typer(webhooks_app, name="webhooks")
 
 
 def run() -> None:
