@@ -1,3 +1,5 @@
+import httpx
+import respx
 from typer.testing import CliRunner
 
 from cardly_cli import __version__
@@ -54,3 +56,37 @@ def test_app_state_is_attached_to_context():
 
     assert AppState.__dataclass_fields__["idempotency_key"]
     assert AppState.__dataclass_fields__["base_url"]
+
+
+def test_missing_key_exits_2(tmp_path):
+    result = runner.invoke(
+        app,
+        ["--config-path", str(tmp_path / "none.toml"), "echo"],
+        env={"CARDLY_API_KEY": "", "CARDLY_PROFILE": ""},
+    )
+    assert result.exit_code == 2
+    assert "No API key found" in result.stderr
+
+
+@respx.mock
+def test_base_url_flag_redirects_requests():
+    route = respx.post("https://mock.test/v2/echo").mock(
+        return_value=httpx.Response(200, json={"state": {"status": "OK"}, "data": {"ok": True}})
+    )
+    result = runner.invoke(
+        app, ["--base-url", "https://mock.test/v2", "--json", "echo"], env={"CARDLY_API_KEY": "k"}
+    )
+    assert result.exit_code == 0
+    assert route.called
+
+
+@respx.mock
+def test_verbose_logs_request_id_but_never_the_key():
+    respx.post("https://api.card.ly/v2/echo").mock(
+        return_value=httpx.Response(
+            200, json={"state": {"status": "OK"}, "data": {}}, headers={"Request-Id": "req_9"}
+        )
+    )
+    result = runner.invoke(app, ["-v", "echo"], env={"CARDLY_API_KEY": "sekrit"})
+    assert "req_9" in result.stderr
+    assert "sekrit" not in result.stderr

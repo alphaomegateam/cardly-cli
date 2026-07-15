@@ -144,9 +144,11 @@ def main(
 # avoid circular imports; the E402 markers are intentional.
 from cardly_cli.commands.echo import echo_app  # noqa: E402
 from cardly_cli.commands.configure import configure_app  # noqa: E402
+from cardly_cli.commands.account import account_app  # noqa: E402
 
 app.add_typer(echo_app, name="echo")
 app.add_typer(configure_app, name="configure")
+app.add_typer(account_app, name="account")
 
 
 def run() -> None:
