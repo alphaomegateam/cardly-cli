@@ -45,7 +45,7 @@ def paginate(
     """
     base_params = dict(params or {})
     offset = 0
-    seen_signature: tuple | None = None
+    seen_signature: str | None = None
 
     while True:
         page_params = dict(base_params)
@@ -58,9 +58,12 @@ def paginate(
             return
 
         # Guard: an endpoint that ignores `offset` returns page 1 forever.
-        # Without this we loop until Cardly rate-limits us (429).
-        signature = (offset, len(results), repr(results[0]))
-        if seen_signature is not None and signature[1:] == seen_signature[1:]:
+        # Without this we loop until Cardly rate-limits us (429). Compare the
+        # FULL page: a true stall returns a byte-identical page, while two
+        # legitimately different pages differ somewhere — so this cannot
+        # false-positive and silently drop real records.
+        signature = repr(results)
+        if signature == seen_signature:
             return
         seen_signature = signature
 

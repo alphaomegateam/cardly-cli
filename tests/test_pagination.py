@@ -108,6 +108,27 @@ def test_stops_when_endpoint_ignores_offset():
 
 
 @respx.mock
+def test_false_positive_regression_different_pages_same_length_and_first_element():
+    # Regression: old signature matched on (len(results), repr(results[0])) only.
+    # Two genuinely different consecutive pages that share the same length and
+    # identical first element (same repr) but differ in subsequent elements would
+    # trigger a false stall, silently dropping the second page's records. This
+    # test verifies that both pages are yielded in full.
+    responses = [
+        httpx.Response(200, json=page([{"id": 1}, {"id": 2}], total=4, limit=2)),
+        httpx.Response(200, json=page([{"id": 1}, {"id": 3}], total=4, limit=2)),
+    ]
+    respx.get("https://api.card.ly/v2/orders").mock(side_effect=responses)
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        items = list(paginate(c, "orders", limit=2))
+    # Both pages must be yielded in full: 4 records total.
+    assert len(items) == 4
+    # Verify records from both pages are present (second page has id=3).
+    ids = [item["id"] for item in items]
+    assert 1 in ids and 2 in ids and 3 in ids
+
+
+@respx.mock
 def test_stops_at_total_records():
     respx.get("https://api.card.ly/v2/orders").mock(
         return_value=httpx.Response(200, json=page([{"id": 1}, {"id": 2}], total=2, limit=100))
