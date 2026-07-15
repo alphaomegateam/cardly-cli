@@ -4141,19 +4141,11 @@ def list_orders(
     state.emit(rows, columns=LIST_COLUMNS)
 ```
 
-> **Note on `client.request("GET", url, raw=True)`:** `url_for` prefixes the base URL, so an absolute preview URL must be passed through unchanged. Add this guard to `url_for` in `client.py` and a test for it:
-> ```python
-> def url_for(settings: CardlySettings, endpoint: str) -> str:
->     if endpoint.startswith(("http://", "https://")):
->         return endpoint
->     return f"{settings.base_url}/{endpoint.lstrip('/')}"
-> ```
-> ```python
-> def test_url_for_passes_absolute_urls_through():
->     assert url_for(SETTINGS, "https://api.card.ly/v2/preview/x/card/pdf") == (
->         "https://api.card.ly/v2/preview/x/card/pdf"
->     )
-> ```
+> **Note on `client.request("GET", url, raw=True)`:** `url_for` would otherwise prefix
+> the base URL onto an absolute preview URL. **This guard already landed in Task 5** —
+> `url_for` passes `http://`/`https://` endpoints through unchanged, with tests in
+> `tests/test_client.py`. Do NOT re-add it here; just call
+> `client.request("GET", url, raw=True)` with the absolute URL and it works.
 
 In `__main__.py`'s bottom import block:
 
