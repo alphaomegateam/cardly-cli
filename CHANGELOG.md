@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] — 2026-07-15
+
+Completes API coverage.
+
+### Added
+
+- `users` — list, get, find, delete (by ID or email)
+- `invitations` — list (with accepted/expired filters), get, find, create, resend
+  (by ID or email), delete (by ID or email)
+- `art` — upload, update, delete. Images are base64-encoded into a JSON body;
+  `--media` is required and its UUID comes from `cardly ref media`.
+- `invitations list` hides accepted invitations unless `--include-accepted` is
+  passed — this is Cardly's default, surfaced in the help text.
+
 ## [0.1.0] — 2026-07-15
 
 ### Added

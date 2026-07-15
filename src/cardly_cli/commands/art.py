@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+from typing import Any, Optional
+
 import typer
 
+from cardly_cli.artwork import WARN_ENCODED_BYTES, build_artwork_pages, encoded_size
+from cardly_cli.commands._helpers import load_data
 from cardly_cli.models.art import Art
 from cardly_cli.pagination import DEFAULT_LIMIT, extract_results, paginate
 
-# v0.1 is read-only. upload/update/delete land in v0.2: POST /art and
-# POST /art/{id} are application/json carrying an `artwork` array of
-# {page, image} where image is a base64-encoded file — the only novel I/O path
-# in the API, and worth its own task plus a body-size measurement.
 art_app = typer.Typer(help="Browse artwork.")
 
 LIST_COLUMNS = ["id", "slug", "name", "type"]
+
+
+def _validate_artwork_data(artwork: Any) -> None:
+    """Validate that artwork (from --data) is a list of {page, image} dicts.
+
+    Raises typer.BadParameter if the structure is invalid. Does not modify
+    artwork; only validates it before passing to _warn_if_large and the API.
+    """
+    if not isinstance(artwork, list):
+        raise typer.BadParameter(
+            f"--data artwork must be a list of {{page, image}} objects, "
+            f"got {type(artwork).__name__}"
+        )
+    for item in artwork:
+        if not isinstance(item, dict):
+            raise typer.BadParameter(
+                f"--data artwork must be a list of {{page, image}} objects, "
+                f"got list containing {type(item).__name__}"
+            )
 
 
 @art_app.command("list")
@@ -43,3 +62,107 @@ def get(
     """Show one artwork by UUID or slug."""
     state = ctx.obj
     state.emit(Art.model_validate(state.client().get(f"art/{art_id}")))
+
+
+MEDIA_HELP = (
+    "UUID of the media (card stock) this artwork uses. Required. "
+    "List the options with `cardly ref media`."
+)
+ARTWORK_HELP = (
+    "Image file for a page: PATH, or N=PATH to set the page explicitly. "
+    "Repeatable. Bare paths number from 1; page 1 is the front."
+)
+
+
+def _warn_if_large(state: Any, pages: list[dict[str, Any]]) -> None:
+    size = encoded_size(pages)
+    if size > WARN_ENCODED_BYTES:
+        state.warn(
+            f"Artwork payload is large ({size / 1024 / 1024:.1f} MB base64-encoded across "
+            f"{len(pages)} page(s)). Cardly's request-body limit is undocumented, so this "
+            f"may be rejected or time out."
+        )
+
+
+@art_app.command("upload")
+def upload(
+    ctx: typer.Context,
+    media: str = typer.Option(..., "--media", help=MEDIA_HELP),
+    name: str = typer.Option(..., "--name", help="Short description for this artwork."),
+    artwork: list[str] = typer.Option([], "--artwork", help=ARTWORK_HELP),
+    description: Optional[str] = typer.Option(
+        None, "--description", help="Longer human-readable description."
+    ),
+    data: Optional[str] = typer.Option(
+        None, "--data", "-d", help="JSON body: inline, @file, or -."
+    ),
+) -> None:
+    """Create artwork from image files.
+
+    Images are base64-encoded into a JSON body (Cardly does not accept multipart).
+    `--media` is required and its UUID comes from `cardly ref media`.
+    """
+    state = ctx.obj
+    body: dict[str, Any] = dict(load_data(data))
+    pages = build_artwork_pages(artwork)
+    if pages:
+        body["artwork"] = pages
+    if not body.get("artwork"):
+        raise typer.BadParameter("--artwork is required: give at least one image file.")
+    _validate_artwork_data(body["artwork"])
+    body["media"] = media
+    body["name"] = name
+    if description:
+        body["description"] = description
+    _warn_if_large(state, body["artwork"])
+    state.emit(Art.model_validate(state.client().post("art", json=body)))
+
+
+@art_app.command("update")
+def update(
+    ctx: typer.Context,
+    art_id: str = typer.Argument(..., help="Artwork UUID or slug."),
+    name: Optional[str] = typer.Option(None, "--name"),
+    description: Optional[str] = typer.Option(None, "--description"),
+    artwork: list[str] = typer.Option([], "--artwork", help=ARTWORK_HELP),
+    data: Optional[str] = typer.Option(
+        None, "--data", "-d", help="JSON body: inline, @file, or -."
+    ),
+) -> None:
+    """Edit artwork. NOTE: Cardly uses POST here, not PUT/PATCH.
+
+    Only the fields you pass are sent. Whether Cardly merges them into the
+    existing artwork or replaces the record is UNVERIFIED — if it replaces, a
+    single-field edit would clear the others.
+    """
+    state = ctx.obj
+    body: dict[str, Any] = dict(load_data(data))
+    pages = build_artwork_pages(artwork)
+    if pages:
+        body["artwork"] = pages
+    if name:
+        body["name"] = name
+    if description:
+        body["description"] = description
+    if not body:
+        raise typer.BadParameter(
+            "Nothing to update: pass --name, --description, --artwork, or --data."
+        )
+    if body.get("artwork"):
+        _validate_artwork_data(body["artwork"])
+        _warn_if_large(state, body["artwork"])
+    state.emit(Art.model_validate(state.client().post(f"art/{art_id}", json=body)))
+
+
+@art_app.command("delete")
+def delete(
+    ctx: typer.Context,
+    art_id: str = typer.Argument(..., help="Artwork UUID or slug."),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation."),
+) -> None:
+    """Delete artwork."""
+    state = ctx.obj
+    if not yes:
+        typer.confirm(f"Delete artwork {art_id}?", abort=True)
+    state.client().delete(f"art/{art_id}")
+    state.warn(f"Deleted artwork {art_id}.")

@@ -12,14 +12,16 @@ EXPECTED_GROUPS = [
     "configure",
     "contacts",
     "echo",
+    "invitations",
     "lists",
     "orders",
     "ref",
     "webhooks",
+    "users",
 ]
 
 
-def test_help_lists_every_v0_1_group():
+def test_help_lists_every_group():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     for group in EXPECTED_GROUPS:
@@ -34,11 +36,17 @@ def test_every_group_help_renders():
         assert result.exit_code == 0, f"{group} --help failed"
 
 
-def test_v0_2_groups_are_absent():
-    # users/invitations are deferred to v0.2; reachable today via `cardly api`.
+def test_v0_2_surface_is_present():
     result = runner.invoke(app, ["--help"])
-    assert "users" not in result.stdout
-    assert "invitations" not in result.stdout
+    assert "users" in result.stdout
+    assert "invitations" in result.stdout
+
+    for cmd in (
+        ["art", "upload", "--help"],
+        ["art", "update", "--help"],
+        ["art", "delete", "--help"],
+    ):
+        assert runner.invoke(app, cmd).exit_code == 0
 
 
 def test_deliberate_absences_stay_absent():
