@@ -306,9 +306,17 @@ def test_redirect_off_cardly_host_does_not_leak_key():
     respx.get("https://api.card.ly/v2/some-endpoint").mock(
         return_value=httpx.Response(302, headers={"Location": "https://evil.example/steal"})
     )
+    # Regression guard: httpx strips only `Authorization` on cross-origin redirects,
+    # never a custom `API-Key` header. Following a 3xx would silently deliver the
+    # live key to the redirect target. The client must reject redirects outright.
+    steal = respx.get("https://evil.example/steal").mock(
+        return_value=httpx.Response(200, text="<html>Attacker captured key!</html>")
+    )
     with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
         with pytest.raises(CardlyError):
             c.get("some-endpoint")
+    # The attacker host must never be contacted at all.
+    assert steal.call_count == 0
 
 
 def test_url_for_upgrades_http_to_https():
