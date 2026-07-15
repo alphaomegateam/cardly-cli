@@ -4,6 +4,7 @@ import sys
 import time
 import uuid
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 import httpx
 
@@ -19,7 +20,12 @@ def url_for(settings: CardlySettings, endpoint: str) -> str:
     # Absolute URLs pass through unchanged: Task 13's preview-PDF download
     # follows a fully-qualified URL returned by an earlier API call, which
     # must not be re-prefixed with base_url.
-    if endpoint.startswith("http://") or endpoint.startswith("https://"):
+    if endpoint.startswith("http://"):
+        # Cardly returns preview URLs as http://; upgrade so the API key
+        # (attached only when the host matches ours) never crosses in
+        # plaintext.
+        return "https://" + endpoint[len("http://") :]
+    if endpoint.startswith("https://"):
         return endpoint
     # Flat join: Cardly has no per-tenant path segment (loxo's `slug`).
     return f"{settings.base_url}/{endpoint.lstrip('/')}"
@@ -54,13 +60,16 @@ class CardlyClient:
         # command issues one logical write.)
         self._idempotency_key = idempotency_key or str(uuid.uuid4())
         self.last_request_id: str | None = None
+        self._cardly_host = urlparse(settings.base_url).hostname
         self._http = httpx.Client(
-            headers={
-                # NOT `Authorization: Bearer`. Cardly uses a bare API-Key header.
-                "API-Key": settings.api_key,
-                "Accept": "application/json",
-            },
-            follow_redirects=True,
+            headers={"Accept": "application/json"},
+            # Never follow redirects: httpx's `_redirect_headers` strips only
+            # `Authorization` on a cross-origin redirect, not a custom
+            # `API-Key` header. Following one would silently deliver the live
+            # key to whatever the redirect points at. A 3xx now surfaces as a
+            # normal non-success response -> a loud CardlyError instead of a
+            # silent leak.
+            follow_redirects=False,
             timeout=TIMEOUT,
         )
 
@@ -73,7 +82,7 @@ class CardlyClient:
     def close(self) -> None:
         self._http.close()
 
-    def _headers_for(self, method: str, json: Any | None) -> dict[str, str]:
+    def _headers_for(self, method: str, json: Any | None, target: str) -> dict[str, str]:
         headers: dict[str, str] = {}
         if json is not None:
             # The docs' prose says `text/json`; the OpenAPI declares
@@ -82,6 +91,13 @@ class CardlyClient:
         if method.upper() == "POST":
             # POST only — Cardly ignores the header on other verbs.
             headers["Idempotency-Key"] = self._idempotency_key
+        target_host = urlparse(target).hostname
+        if target_host is not None and self._cardly_host is not None:
+            if target_host.lower() == self._cardly_host.lower():
+                # Only attach the key to our own host. Task 13's preview/PDF
+                # download and any other absolute-URL target (e.g. a CDN)
+                # must never receive it.
+                headers["API-Key"] = self._settings.api_key
         return headers
 
     def _error_from_response(
@@ -112,7 +128,10 @@ class CardlyClient:
         raw: bool = False,
     ) -> Any:
         target = url_for(self._settings, endpoint)
-        headers = self._headers_for(method, json)
+        # Resolved once, outside the retry loop: the target doesn't change
+        # across retries, and this is what keeps the idempotency key stable
+        # across every retry of a given POST.
+        headers = self._headers_for(method, json, target)
         previous: AttemptResult | None = None
         attempt = 0
 
@@ -149,18 +168,34 @@ class CardlyClient:
                     return response
                 if not response.content:
                     return None
-                payload = response.json()
+                try:
+                    payload = response.json()
+                except ValueError as exc:
+                    # A 200 with a non-JSON body (proxy/WAF interstitial, etc.)
+                    # must degrade to a clean CardlyError, not a bare traceback.
+                    raise CardlyError(
+                        f"Cardly {method.upper()} {endpoint} returned 200 with a "
+                        f"non-JSON body.",
+                        status_code=response.status_code,
+                    ) from exc
                 raise_for_state(payload, status_code=response.status_code)
                 return unwrap(payload)
 
             current = AttemptResult(status_code=response.status_code, body=response.content)
-            if is_cached_replay(previous, current, elapsed):
+            # Only POST carries an Idempotency-Key, so only POST can be a
+            # replay served from Cardly's idempotency store. A GET/DELETE
+            # that returns two identical fast 5xx responses is an ordinary
+            # transient condition (e.g. a load balancer), not a replay — it
+            # must retry the full budget, not abort early.
+            if method.upper() == "POST" and is_cached_replay(previous, current, elapsed):
                 # Cardly stored this failure against our idempotency key and is
                 # replaying it without reprocessing. More retries cannot help.
+                # Build on the normal error so the server's actual message
+                # (state.messages) survives instead of being discarded.
+                err = self._error_from_response(response, method, endpoint)
                 raise CardlyError(
-                    f"Cardly {method.upper()} {endpoint} returned {response.status_code} "
-                    f"replayed from the idempotency store; retrying cannot change it. "
-                    f"Use a new --idempotency-key to force reprocessing.",
+                    f"{err.message} — replayed from the idempotency store; retrying cannot "
+                    f"change it. Use a new --idempotency-key to force reprocessing.",
                     status_code=response.status_code,
                 )
 

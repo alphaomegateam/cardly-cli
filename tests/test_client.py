@@ -25,8 +25,10 @@ def test_url_for_passes_through_absolute_urls():
     # API itself; url_for must not try to prefix it with base_url.
     absolute = "https://cdn.card.ly/previews/abc123.pdf"
     assert url_for(SETTINGS, absolute) == absolute
+    # http:// is upgraded to https:// so the API key never crosses the wire
+    # in plaintext (Cardly returns preview URLs as http://).
     assert url_for(SETTINGS, "http://cdn.card.ly/previews/abc123.pdf") == (
-        "http://cdn.card.ly/previews/abc123.pdf"
+        "https://cdn.card.ly/previews/abc123.pdf"
     )
 
 
@@ -261,6 +263,69 @@ def test_cached_replay_aborts_the_retry_loop_early():
     # First attempt + one retry that revealed the replay. Not all 5.
     assert len(route.calls) == 2
     assert "idempotency" in str(ei.value).lower()
+    assert "stored failure" in str(ei.value)
+
+
+@respx.mock
+def test_get_with_identical_fast_5xx_retries_full_budget():
+    # GET never carries an idempotency key, so the cached-replay heuristic
+    # must not fire for it: two byte-identical fast 502s from a load balancer
+    # are an ordinary transient condition, not a replayed idempotent write.
+    route = respx.get("https://api.card.ly/v2/orders").mock(
+        return_value=httpx.Response(502, text="Bad Gateway")
+    )
+    with CardlyClient(
+        SETTINGS, retry=RetryPolicy(max_retries=3, base_delay=0), sleep=lambda _: None
+    ) as c:
+        with pytest.raises(CardlyError):
+            c.get("orders")
+    # Full budget: initial attempt + 3 retries, not aborted after 2.
+    assert len(route.calls) == 4
+
+
+@respx.mock
+def test_sends_api_key_to_cardly_host():
+    route = respx.get("https://api.card.ly/v2/account/balance").mock(
+        return_value=httpx.Response(200, json=ok({"balance": 100}))
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        c.get("account/balance")
+    assert route.calls.last.request.headers["API-Key"] == "test_key"
+
+
+@respx.mock
+def test_does_not_send_api_key_to_non_cardly_host():
+    respx.get("https://cdn.example/x.pdf").mock(return_value=httpx.Response(200, content=b"%PDF"))
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        resp = c.request("GET", "https://cdn.example/x.pdf", raw=True)
+    assert "API-Key" not in resp.request.headers
+
+
+@respx.mock
+def test_redirect_off_cardly_host_does_not_leak_key():
+    respx.get("https://api.card.ly/v2/some-endpoint").mock(
+        return_value=httpx.Response(302, headers={"Location": "https://evil.example/steal"})
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        with pytest.raises(CardlyError):
+            c.get("some-endpoint")
+
+
+def test_url_for_upgrades_http_to_https():
+    assert url_for(SETTINGS, "http://api.card.ly/v2/preview/x") == (
+        "https://api.card.ly/v2/preview/x"
+    )
+
+
+@respx.mock
+def test_200_with_non_json_body_raises_cardly_error():
+    respx.get("https://api.card.ly/v2/orders").mock(
+        return_value=httpx.Response(200, text="<html>Access Denied</html>")
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        with pytest.raises(CardlyError) as ei:
+            c.get("orders")
+    assert ei.value.status_code == 200
 
 
 @respx.mock
