@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 from cardly_cli import __version__
 from cardly_cli.__main__ import app
 from cardly_cli.models.base import CardlyModel, compact
+from conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -34,6 +35,7 @@ def test_no_args_shows_help():
 
 def test_root_help_lists_global_flags():
     result = runner.invoke(app, ["--help"])
+    stdout = strip_ansi(result.stdout)
     for flag in (
         "--profile",
         "--api-key",
@@ -47,7 +49,7 @@ def test_root_help_lists_global_flags():
         "--max-retries",
         "--idempotency-key",
     ):
-        assert flag in result.stdout, f"missing global flag: {flag}"
+        assert flag in stdout, f"missing global flag: {flag}"
 
 
 @respx.mock

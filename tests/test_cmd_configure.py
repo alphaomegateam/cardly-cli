@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 from cardly_cli.__main__ import app
 from cardly_cli.config import load_settings
+from conftest import strip_ansi
 
 runner = CliRunner()
 
@@ -40,7 +41,7 @@ def test_configure_set_requires_a_key_source(tmp_path):
     path = tmp_path / "config.toml"
     result = runner.invoke(app, ["--config-path", str(path), "configure", "set", "p"])
     assert result.exit_code != 0
-    assert "--api-key" in result.stderr or "--api-key" in result.stdout
+    assert "--api-key" in strip_ansi(result.stderr) or "--api-key" in strip_ansi(result.stdout)
 
 
 def test_configure_set_rejects_both_key_sources(tmp_path):

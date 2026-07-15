@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-import pytest
+import re
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-@pytest.fixture(autouse=True)
-def _stable_console_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make CLI output deterministic regardless of the developer's shell.
+def strip_ansi(text: str) -> str:
+    """Strip ANSI escape sequences from rendered CLI output.
 
-    Rich treats FORCE_COLOR as "this is a terminal" even when output is
-    captured, and injects ANSI escapes that break substring assertions on
-    --help text. Developer profiles commonly set it; CI usually doesn't, so
-    without this the suite passes in CI and fails locally.
+    Rich decides whether to colourise based on the environment (FORCE_COLOR,
+    CLICOLOR_FORCE, TTY_COMPATIBLE, isatty, ...) and that decision varies by
+    where the suite runs (e.g. GitHub Actions sets TTY_COMPATIBLE, which a
+    developer shell usually doesn't). When it does colourise, Rich can split a
+    word like ``--profile`` across escape codes, so a literal substring check
+    against rendered output is fragile regardless of which env vars happen to
+    be set. Strip escapes first so assertions are colour-state independent.
 
-    Scope is deliberately narrow: strip only the force-color vars, which are
-    the actual culprit. Setting NO_COLOR/TERM here instead would assert an
-    opinion about what colour state every test runs under, and would silently
-    mask a future test that means to verify colour IS emitted, or one
-    exercising console()'s isatty branch.
+    Note the character class is ``[A-Za-z]``, not just ``m`` — Rich emits more
+    than plain SGR resets (e.g. cursor movement) using other final bytes.
     """
-    monkeypatch.delenv("FORCE_COLOR", raising=False)
-    monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+    return _ANSI.sub("", text)

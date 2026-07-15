@@ -5,6 +5,7 @@ import respx
 from typer.testing import CliRunner
 
 from cardly_cli.__main__ import app
+from conftest import strip_ansi
 
 runner = CliRunner()
 ENV = {"CARDLY_API_KEY": "k"}
@@ -81,7 +82,8 @@ def test_sync_requires_a_match_key():
     route = respx.post(f"{BASE}/sync").mock(return_value=httpx.Response(200, json=ok({"id": "c1"})))
     result = runner.invoke(app, ["contacts", "sync", "L1", "--first-name", "Ada"], env=ENV)
     assert result.exit_code == 2
-    assert "--external-id" in result.stderr or "--email" in result.stderr
+    stderr = strip_ansi(result.stderr)
+    assert "--external-id" in stderr or "--email" in stderr
     assert route.called is False
 
 
@@ -226,7 +228,7 @@ def test_delete_all_requires_data():
     route = respx.delete(BASE).mock(return_value=httpx.Response(200, json=ok({})))
     result = runner.invoke(app, ["contacts", "delete-all", "L1", "--yes"], env=ENV)
     assert result.exit_code == 2
-    assert "--data" in result.stderr
+    assert "--data" in strip_ansi(result.stderr)
     assert route.called is False
 
 

@@ -6,6 +6,7 @@ import respx
 from typer.testing import CliRunner
 
 from cardly_cli.__main__ import app
+from conftest import strip_ansi
 
 runner = CliRunner()
 ENV = {"CARDLY_API_KEY": "k"}
@@ -101,7 +102,7 @@ def test_webhooks_update_uses_post_and_requires_target_url():
     # Cardly marks targetUrl required on update even when only toggling disabled.
     missing = runner.invoke(app, ["webhooks", "update", "w1", "--disabled"], env=ENV)
     assert missing.exit_code == 2
-    assert "--target-url" in missing.stderr
+    assert "--target-url" in strip_ansi(missing.stderr)
     assert not route.called
 
     result = runner.invoke(
