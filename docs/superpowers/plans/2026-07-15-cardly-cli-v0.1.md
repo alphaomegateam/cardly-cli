@@ -1943,7 +1943,12 @@ git commit -m "feat: add offset/limit pagination that advances by returned page 
 
 **Files:**
 - Create: `src/cardly_cli/models/base.py`, `src/cardly_cli/commands/_app.py`, `src/cardly_cli/__main__.py`
-- Test: `tests/test_app_state.py`, `tests/test_error_exit_codes.py`
+- Test: `tests/test_app_state.py`
+
+**This task must end with the full suite GREEN.** Tests that need a real command to
+exercise (credential resolution, `--base-url` routing, the exit-code contract) land in
+Task 11, which provides the `echo`/`account` commands they drive. At this task the app
+has a spine and a stub `echo` group only.
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–7.
@@ -1960,8 +1965,6 @@ At this task the app registers **no** sub-commands yet — later tasks add their
 `tests/test_app_state.py`:
 
 ```python
-import httpx
-import respx
 from typer.testing import CliRunner
 
 from cardly_cli import __version__
@@ -1994,97 +1997,25 @@ def test_no_args_shows_help():
     assert "cardly" in result.stdout.lower()
 
 
-def test_missing_key_exits_2(tmp_path):
-    result = runner.invoke(
-        app,
-        ["--config-path", str(tmp_path / "none.toml"), "echo"],
-        env={"CARDLY_API_KEY": "", "CARDLY_PROFILE": ""},
-    )
-    assert result.exit_code == 2
-    assert "No API key found" in result.stderr
+def test_root_help_lists_global_flags():
+    result = runner.invoke(app, ["--help"])
+    for flag in ("--profile", "--api-key", "--base-url", "--json", "--jq",
+                 "--quiet", "--verbose", "--no-color", "--no-retry",
+                 "--max-retries", "--idempotency-key"):
+        assert flag in result.stdout, f"missing global flag: {flag}"
 
 
-@respx.mock
-def test_base_url_flag_redirects_requests():
-    route = respx.post("https://mock.test/v2/echo").mock(
-        return_value=httpx.Response(200, json={"state": {"status": "OK"}, "data": {"ok": True}})
-    )
-    result = runner.invoke(
-        app, ["--base-url", "https://mock.test/v2", "--json", "echo"], env={"CARDLY_API_KEY": "k"}
-    )
-    assert result.exit_code == 0
-    assert route.called
+def test_app_state_is_attached_to_context():
+    # AppState carries flags to commands; nothing else can resolve settings.
+    from cardly_cli.__main__ import AppState
+
+    assert AppState.__dataclass_fields__["idempotency_key"]
+    assert AppState.__dataclass_fields__["base_url"]
 ```
 
-`tests/test_error_exit_codes.py`:
-
-```python
-import httpx
-import pytest
-import respx
-from typer.testing import CliRunner
-
-from cardly_cli.__main__ import app
-
-runner = CliRunner()
-ENV = {"CARDLY_API_KEY": "k"}
-
-
-def err(messages):
-    return {"state": {"status": "ERROR", "messages": messages}}
-
-
-@pytest.mark.parametrize(
-    "status,expected",
-    [(401, 3), (403, 3), (404, 4), (402, 8), (422, 1), (400, 1)],
-)
-@respx.mock
-def test_http_status_maps_to_exit_code(status, expected):
-    respx.get("https://api.card.ly/v2/account/balance").mock(
-        return_value=httpx.Response(status, json=err(["nope"]))
-    )
-    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
-    assert result.exit_code == expected
-
-
-@respx.mock
-def test_429_after_retries_exits_5():
-    respx.get("https://api.card.ly/v2/account/balance").mock(
-        return_value=httpx.Response(429, json=err(["slow down"]))
-    )
-    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
-    assert result.exit_code == 5
-
-
-@respx.mock
-def test_5xx_after_retries_exits_6():
-    respx.get("https://api.card.ly/v2/account/balance").mock(
-        return_value=httpx.Response(500, json=err(["boom"]))
-    )
-    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
-    assert result.exit_code == 6
-
-
-@respx.mock
-def test_timeout_exits_7():
-    respx.get("https://api.card.ly/v2/account/balance").mock(
-        side_effect=httpx.ConnectTimeout("t")
-    )
-    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
-    assert result.exit_code == 7
-
-
-@respx.mock
-def test_error_message_goes_to_stderr_cleanly():
-    respx.get("https://api.card.ly/v2/account/balance").mock(
-        return_value=httpx.Response(404, json=err(["Not found."]))
-    )
-    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
-    assert result.stderr.startswith("Error:")
-    assert "Traceback" not in result.stderr
-```
-
-> **Note:** these tests import `account` commands added in Task 11. Run only `tests/test_app_state.py` at this task; `tests/test_error_exit_codes.py` goes green once Task 11 lands. Do not delete it — it is the exit-code contract.
+> **Deliberately NOT here:** credential-resolution, `--base-url` routing, and the
+> exit-code contract all need a real command to drive. They land in Task 11 with the
+> `echo`/`account` commands. This task ends green.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2331,17 +2262,17 @@ if __name__ == "__main__":
 > ```
 > Task 10 replaces it with the real implementation.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run the FULL suite to verify it is green**
 
-Run: `uv run pytest tests/test_app_state.py -q`
-Expected: PASS for `test_version_flag`, `test_no_args_shows_help`, `test_missing_key_exits_2`. `test_base_url_flag_redirects_requests` FAILS until Task 10 — that is expected; note it and move on.
+Run: `uv run pytest -q`
+Expected: PASS — every test, including Tasks 1–7's. This task must not leave a red test behind.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/cardly_cli/models/base.py src/cardly_cli/commands/_app.py \
         src/cardly_cli/commands/echo.py src/cardly_cli/__main__.py \
-        tests/test_app_state.py tests/test_error_exit_codes.py
+        tests/test_app_state.py
 git commit -m "feat: add app spine with AppState, global flags and exit-code group"
 ```
 
@@ -2744,7 +2675,12 @@ git commit -m "feat: add configure command for profile management"
 **Files:**
 - Create: `src/cardly_cli/models/account.py`, `src/cardly_cli/commands/account.py`
 - Modify: `src/cardly_cli/commands/echo.py` (replace the Task 8 stub), `src/cardly_cli/__main__.py`
-- Test: `tests/test_cmd_echo.py`, `tests/test_cmd_account.py`
+- Test: `tests/test_cmd_echo.py`, `tests/test_cmd_account.py`, `tests/test_error_exit_codes.py` (new), `tests/test_app_state.py` (append)
+
+**This task also lands the deferred spine tests.** Task 8 built `AppState` and the
+exit-code group but could not exercise them: credential resolution, `--base-url`
+routing, and the exit-code contract all need a real command to drive. `echo` and
+`account balance` are those commands, so those tests belong here.
 
 **Interfaces:**
 - Consumes: `CardlyModel` (Task 8), `AppState`, `CardlyClient`.
@@ -2798,6 +2734,44 @@ def test_echo_401_exits_3():
     )
     result = runner.invoke(app, ["--no-retry", "echo"], env=ENV)
     assert result.exit_code == 3
+```
+
+Append to `tests/test_app_state.py` (the spine tests Task 8 deferred — they need a
+real command to drive). Add `import httpx` and `import respx` to that file's imports:
+
+```python
+def test_missing_key_exits_2(tmp_path):
+    result = runner.invoke(
+        app,
+        ["--config-path", str(tmp_path / "none.toml"), "echo"],
+        env={"CARDLY_API_KEY": "", "CARDLY_PROFILE": ""},
+    )
+    assert result.exit_code == 2
+    assert "No API key found" in result.stderr
+
+
+@respx.mock
+def test_base_url_flag_redirects_requests():
+    route = respx.post("https://mock.test/v2/echo").mock(
+        return_value=httpx.Response(200, json={"state": {"status": "OK"}, "data": {"ok": True}})
+    )
+    result = runner.invoke(
+        app, ["--base-url", "https://mock.test/v2", "--json", "echo"], env={"CARDLY_API_KEY": "k"}
+    )
+    assert result.exit_code == 0
+    assert route.called
+
+
+@respx.mock
+def test_verbose_logs_request_id_but_never_the_key():
+    respx.post("https://api.card.ly/v2/echo").mock(
+        return_value=httpx.Response(
+            200, json={"state": {"status": "OK"}, "data": {}}, headers={"Request-Id": "req_9"}
+        )
+    )
+    result = runner.invoke(app, ["-v", "echo"], env={"CARDLY_API_KEY": "sekrit"})
+    assert "req_9" in result.stderr
+    assert "sekrit" not in result.stderr
 ```
 
 `tests/test_cmd_account.py`:
@@ -2875,6 +2849,69 @@ def test_gift_credit_history_uses_its_own_endpoint():
     result = runner.invoke(app, ["--json", "account", "gift-credit-history"], env=ENV)
     assert result.exit_code == 0
     assert route.called
+```
+
+`tests/test_error_exit_codes.py` — the exit-code contract, deferred from Task 8
+because it needs a real command to drive:
+
+```python
+import httpx
+import pytest
+import respx
+from typer.testing import CliRunner
+
+from cardly_cli.__main__ import app
+
+runner = CliRunner()
+ENV = {"CARDLY_API_KEY": "k"}
+
+
+def err(messages):
+    return {"state": {"status": "ERROR", "messages": messages}}
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [(401, 3), (403, 3), (404, 4), (402, 8), (422, 1), (400, 1), (429, 5), (500, 6), (503, 6)],
+)
+@respx.mock
+def test_http_status_maps_to_exit_code(status, expected):
+    respx.get("https://api.card.ly/v2/account/balance").mock(
+        return_value=httpx.Response(status, json=err(["nope"]))
+    )
+    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
+    assert result.exit_code == expected
+
+
+@respx.mock
+def test_timeout_exits_7():
+    respx.get("https://api.card.ly/v2/account/balance").mock(
+        side_effect=httpx.ConnectTimeout("t")
+    )
+    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
+    assert result.exit_code == 7
+
+
+@respx.mock
+def test_402_carries_its_message_and_exits_8():
+    # 402 gets its own code because a scheduled job must treat it differently:
+    # not transient, not a bug — top up the account.
+    respx.get("https://api.card.ly/v2/account/balance").mock(
+        return_value=httpx.Response(402, json=err(["Insufficient credit: need 5, have 2."]))
+    )
+    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
+    assert result.exit_code == 8
+    assert "Insufficient credit" in result.stderr
+
+
+@respx.mock
+def test_error_message_goes_to_stderr_cleanly():
+    respx.get("https://api.card.ly/v2/account/balance").mock(
+        return_value=httpx.Response(404, json=err(["Not found."]))
+    )
+    result = runner.invoke(app, ["--no-retry", "account", "balance"], env=ENV)
+    assert result.stderr.startswith("Error:")
+    assert "Traceback" not in result.stderr
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -3073,16 +3110,17 @@ app.add_typer(account_app, name="account")
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_cmd_echo.py tests/test_cmd_account.py tests/test_error_exit_codes.py tests/test_app_state.py -q`
-Expected: PASS — `test_error_exit_codes.py` and `test_base_url_flag_redirects_requests` now go green too.
+Run: `uv run pytest -q`
+Expected: PASS — the full suite, including the exit-code contract and the `--base-url` / credential tests this task lands.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/cardly_cli/models/account.py src/cardly_cli/commands/account.py \
         src/cardly_cli/commands/echo.py src/cardly_cli/__main__.py \
-        tests/test_cmd_echo.py tests/test_cmd_account.py
-git commit -m "feat: add echo and account commands"
+        tests/test_cmd_echo.py tests/test_cmd_account.py \
+        tests/test_error_exit_codes.py tests/test_app_state.py
+git commit -m "feat: add echo and account commands with exit-code contract tests"
 ```
 
 ---
@@ -4103,19 +4141,11 @@ def list_orders(
     state.emit(rows, columns=LIST_COLUMNS)
 ```
 
-> **Note on `client.request("GET", url, raw=True)`:** `url_for` prefixes the base URL, so an absolute preview URL must be passed through unchanged. Add this guard to `url_for` in `client.py` and a test for it:
-> ```python
-> def url_for(settings: CardlySettings, endpoint: str) -> str:
->     if endpoint.startswith(("http://", "https://")):
->         return endpoint
->     return f"{settings.base_url}/{endpoint.lstrip('/')}"
-> ```
-> ```python
-> def test_url_for_passes_absolute_urls_through():
->     assert url_for(SETTINGS, "https://api.card.ly/v2/preview/x/card/pdf") == (
->         "https://api.card.ly/v2/preview/x/card/pdf"
->     )
-> ```
+> **Note on `client.request("GET", url, raw=True)`:** `url_for` would otherwise prefix
+> the base URL onto an absolute preview URL. **This guard already landed in Task 5** —
+> `url_for` passes `http://`/`https://` endpoints through unchanged, with tests in
+> `tests/test_client.py`. Do NOT re-add it here; just call
+> `client.request("GET", url, raw=True)` with the absolute URL and it works.
 
 In `__main__.py`'s bottom import block:
 
