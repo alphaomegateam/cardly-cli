@@ -14,6 +14,25 @@ art_app = typer.Typer(help="Browse artwork.")
 LIST_COLUMNS = ["id", "slug", "name", "type"]
 
 
+def _validate_artwork_data(artwork: Any) -> None:
+    """Validate that artwork (from --data) is a list of {page, image} dicts.
+
+    Raises typer.BadParameter if the structure is invalid. Does not modify
+    artwork; only validates it before passing to _warn_if_large and the API.
+    """
+    if not isinstance(artwork, list):
+        raise typer.BadParameter(
+            f"--data artwork must be a list of {{page, image}} objects, "
+            f"got {type(artwork).__name__}"
+        )
+    for item in artwork:
+        if not isinstance(item, dict):
+            raise typer.BadParameter(
+                f"--data artwork must be a list of {{page, image}} objects, "
+                f"got list containing {type(item).__name__}"
+            )
+
+
 @art_app.command("list")
 def list_art(
     ctx: typer.Context,
@@ -90,6 +109,7 @@ def upload(
         body["artwork"] = pages
     if not body.get("artwork"):
         raise typer.BadParameter("--artwork is required: give at least one image file.")
+    _validate_artwork_data(body["artwork"])
     body["media"] = media
     body["name"] = name
     if description:
@@ -129,6 +149,7 @@ def update(
             "Nothing to update: pass --name, --description, --artwork, or --data."
         )
     if body.get("artwork"):
+        _validate_artwork_data(body["artwork"])
         _warn_if_large(state, body["artwork"])
     state.emit(Art.model_validate(state.client().post(f"art/{art_id}", json=body)))
 

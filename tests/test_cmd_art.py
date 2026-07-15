@@ -162,3 +162,77 @@ def test_art_delete_requires_confirmation():
     result = runner.invoke(app, ["art", "delete", "a1", "--yes"], env=ENV)
     assert result.exit_code == 0
     assert route.called
+
+
+@respx.mock
+def test_art_upload_rejects_malformed_artwork_string_via_data():
+    route = respx.post("https://api.card.ly/v2/art").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        ["art", "upload", "--media", "m1", "--name", "N", "--data", '{"artwork":"nonsense"}'],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert not route.called
+    assert not isinstance(result.exception, AttributeError)
+
+
+@respx.mock
+def test_art_upload_rejects_malformed_artwork_list_of_ints_via_data():
+    route = respx.post("https://api.card.ly/v2/art").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        ["art", "upload", "--media", "m1", "--name", "N", "--data", '{"artwork":[1,2]}'],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert not route.called
+    assert not isinstance(result.exception, AttributeError)
+
+
+@respx.mock
+def test_art_update_rejects_malformed_artwork_string_via_data():
+    route = respx.post("https://api.card.ly/v2/art/a1").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app, ["art", "update", "a1", "--data", '{"artwork":"nonsense"}'], env=ENV
+    )
+    assert result.exit_code == 2
+    assert not route.called
+    assert not isinstance(result.exception, AttributeError)
+
+
+@respx.mock
+def test_art_upload_accepts_correctly_shaped_artwork_via_data_only():
+    import base64
+
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"id": "a1", "name": "Thanks"}))
+
+    respx.post("https://api.card.ly/v2/art").mock(side_effect=handler)
+    encoded = base64.b64encode(b"IMAGEDATA").decode("ascii")
+    result = runner.invoke(
+        app,
+        [
+            "art",
+            "upload",
+            "--media",
+            "m1",
+            "--name",
+            "Thanks",
+            "--data",
+            json.dumps({"artwork": [{"page": 1, "image": encoded}]}),
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    body = captured["body"]
+    assert body["artwork"] == [{"page": 1, "image": encoded}]
