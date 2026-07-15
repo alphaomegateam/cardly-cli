@@ -36,11 +36,17 @@ def set_profile(
         config_path=state.config_path,
     )
     path = state.config_path or config_file_path()
-    state.warn(f"Wrote profile '{name}' to {path}")
+    profiles = list_profiles(config_path=state.config_path)
+    became_default = profiles.get(name, {}).get("default", False)
+    state.warn(
+        f"Wrote profile '{name}' to {path}" + (" (now the default)" if became_default else "")
+    )
 
 
 @configure_app.command("list")
 def list_cmd(ctx: typer.Context) -> None:
     """List configured profiles. Never prints stored keys."""
     state = ctx.obj
-    state.emit(list_profiles(config_path=state.config_path))
+    profiles = list_profiles(config_path=state.config_path)
+    rows = [{"name": name, **data} for name, data in profiles.items()]
+    state.emit(rows, columns=["name", "base_url", "has_key", "default"])

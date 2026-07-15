@@ -71,7 +71,10 @@ def test_configure_list_never_prints_the_key(tmp_path):
     assert result.exit_code == 0
     assert "live_SECRET" not in result.stdout
     payload = json.loads(result.stdout)
-    assert payload["prod"]["has_key"] is True
+    assert isinstance(payload, list)
+    prod_row = next((row for row in payload if row["name"] == "prod"), None)
+    assert prod_row is not None
+    assert prod_row["has_key"] is True
 
 
 def test_configure_set_make_default(tmp_path):
@@ -81,3 +84,13 @@ def test_configure_set_make_default(tmp_path):
         app, ["--config-path", str(path), "configure", "set", "b", "--api-key", "2", "--default"]
     )
     assert load_settings(env={}, config_path=path).api_key == "2"
+
+
+def test_configure_set_first_profile_implicitly_becomes_default(tmp_path):
+    path = tmp_path / "config.toml"
+    result = runner.invoke(
+        app, ["--config-path", str(path), "configure", "set", "prod", "--api-key", "live_first"]
+    )
+    assert result.exit_code == 0
+    assert "now the default" in result.stderr
+    assert load_settings(env={}, config_path=path).api_key == "live_first"
