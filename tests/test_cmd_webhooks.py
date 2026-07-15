@@ -198,3 +198,185 @@ def test_verify_needs_no_api_key(tmp_path):
         app, ["webhooks", "verify", str(path), "--secret", "s3cret"], env={"CARDLY_API_KEY": ""}
     )
     assert result.exit_code == 0
+
+
+@respx.mock
+def test_webhooks_create_402_exits_8_no_webhook_limit_hint():
+    # 402 is insufficient credit, not a webhook cap issue. Must exit 8 and NOT
+    # append the webhook-limit hint, so the server's message comes through clean.
+    respx.post("https://api.card.ly/v2/webhooks").mock(
+        return_value=httpx.Response(
+            402,
+            json=ok({"code": "insufficient_credit"}),
+        )
+    )
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "create",
+            "--target-url",
+            "https://x.test",
+            "--event",
+            "qrCode.scanned",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 8
+    # The webhook-limit hint should NOT be appended for 402 errors.
+    assert "Cardly allows up to" not in result.stderr
+    assert "delete one before adding another" not in result.stderr
+
+
+@respx.mock
+def test_webhooks_create_422_webhook_cap_gets_hint():
+    # A 422 that mentions "webhook" + "limit" or similar should get the hint.
+    respx.post("https://api.card.ly/v2/webhooks").mock(
+        return_value=httpx.Response(
+            422,
+            json={
+                "state": {"status": "ERROR", "messages": []},
+                "data": {"webhooks": "You have reached the maximum number of active webhooks."},
+            },
+        )
+    )
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "create",
+            "--target-url",
+            "https://x.test",
+            "--event",
+            "qrCode.scanned",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 1
+    assert "maximum number of active webhooks" in result.stderr
+    assert "Cardly allows up to" in result.stderr
+    assert "delete one before adding another" in result.stderr
+
+
+@respx.mock
+def test_webhooks_create_422_test_key_gets_hint():
+    # A 422 that mentions "test" + "key" should get the hint.
+    respx.post("https://api.card.ly/v2/webhooks").mock(
+        return_value=httpx.Response(
+            422,
+            json={
+                "state": {"status": "ERROR", "messages": []},
+                "data": {"apiKey": "Test keys cannot create webhooks; use a live_ key."},
+            },
+        )
+    )
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "create",
+            "--target-url",
+            "https://x.test",
+            "--event",
+            "qrCode.scanned",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 1
+    assert "Test keys cannot" in result.stderr
+    assert "Cardly allows up to" in result.stderr
+
+
+@respx.mock
+def test_webhooks_create_422_unrelated_no_hint():
+    # A 422 about something else (bad URL, oversized description, etc.)
+    # should NOT get the webhook-limit hint.
+    respx.post("https://api.card.ly/v2/webhooks").mock(
+        return_value=httpx.Response(
+            422,
+            json={
+                "state": {"status": "ERROR", "messages": []},
+                "data": {"targetUrl": "Invalid HTTPS URL"},
+            },
+        )
+    )
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "create",
+            "--target-url",
+            "https://x.test",
+            "--event",
+            "qrCode.scanned",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 1
+    assert "Invalid HTTPS URL" in result.stderr
+    assert "Cardly allows up to" not in result.stderr
+    assert "delete one before adding another" not in result.stderr
+
+
+def test_webhooks_create_rejects_repeated_metadata_key():
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "create",
+            "--target-url",
+            "https://x.test",
+            "--event",
+            "qrCode.scanned",
+            "--metadata",
+            "team=growth",
+            "--metadata",
+            "team=sales",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "team" in result.stderr
+    assert "repeated" in result.stderr.lower()
+
+
+@respx.mock
+def test_webhooks_update_rejects_repeated_metadata_key():
+    route = respx.post("https://api.card.ly/v2/webhooks/w1").mock(
+        return_value=httpx.Response(200, json=ok({"id": "w1"}))
+    )
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "update",
+            "w1",
+            "--target-url",
+            "https://x.test",
+            "--metadata",
+            "env=prod",
+            "--metadata",
+            "env=staging",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "env" in result.stderr
+    assert "repeated" in result.stderr.lower()
+    assert not route.called
+
+
+def test_webhooks_verify_missing_file_path_clean_error(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "webhooks",
+            "verify",
+            "/nope/missing.json",
+            "--secret",
+            "s3cret",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "/nope/missing.json" in result.stderr
+    assert "Traceback" not in result.stderr

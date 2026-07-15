@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -15,6 +16,16 @@ from cardly_cli.signature import verify as verify_signature
 webhooks_app = typer.Typer(help="Manage webhooks and verify postback signatures.")
 
 LIST_COLUMNS = ["id", "status", "targetUrl", "description", "protected"]
+
+# Matches webhook cap or test-key rejection errors. Webhook cap errors mention
+# reaching a limit/max of webhooks. Test key errors mention that test keys
+# cannot create webhooks or that a live key is required. A bare status_code==422
+# match fires on any validation error (bad URL, oversized description, etc.),
+# which would misdirect users with an irrelevant webhook-cap hint.
+_WEBHOOK_CAP_OR_TEST_KEY_RE = re.compile(
+    r"\b(webhook.*limit|webhook.*maximum|webhook.*active|test.*key|live.*key)",
+    re.IGNORECASE,
+)
 
 
 def _check_events(events: list[str]) -> None:
@@ -69,12 +80,24 @@ def create(
         body["description"] = description
     meta = parse_fields(metadata)
     if meta:
+        # Reject repeated metadata keys: parse_fields merges them into a list,
+        # but Cardly's metadata is a key-value object of scalars.
+        for key, value in meta.items():
+            if isinstance(value, list):
+                raise typer.BadParameter(
+                    f"--metadata key {key!r} is repeated; each key must appear at most once."
+                )
         body["metadata"] = meta
 
     try:
         result = state.client().post("webhooks", json=body)
     except CardlyError as exc:
-        if exc.status_code in (402, 422):
+        # Only append the webhook cap/test-key hint for 422s that specifically
+        # mention those cases. A bare status_code==422 match would fire on any
+        # validation error (bad URL, oversized description, etc.) and misdirect
+        # users. The server's message must come through clean if we can't
+        # confidently identify it as the cap/test-key case.
+        if exc.status_code == 422 and _WEBHOOK_CAP_OR_TEST_KEY_RE.search(str(exc)):
             raise CardlyError(
                 f"{exc.format_message()} (Cardly allows up to {WEBHOOK_LIMIT} active or "
                 f"disabled webhooks; delete one before adding another. Note that test_ "
@@ -128,6 +151,13 @@ def update(
         body["description"] = description
     meta = parse_fields(metadata)
     if meta:
+        # Reject repeated metadata keys: parse_fields merges them into a list,
+        # but Cardly's metadata is a key-value object of scalars.
+        for key, value in meta.items():
+            if isinstance(value, list):
+                raise typer.BadParameter(
+                    f"--metadata key {key!r} is repeated; each key must appear at most once."
+                )
         body["metadata"] = meta
     if disabled is not None:
         body["disabled"] = disabled
@@ -171,7 +201,10 @@ def verify(
     alone. This tries whichever the inputs allow and reports which matched.
     """
     state = ctx.obj
-    raw = sys.stdin.buffer.read() if body == "-" else Path(body).read_bytes()
+    try:
+        raw = sys.stdin.buffer.read() if body == "-" else Path(body).read_bytes()
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read {body!r}: {exc}") from exc
     headers = parse_fields(header)
     result = verify_signature(raw, secret, headers=headers)
     if result.matched:
