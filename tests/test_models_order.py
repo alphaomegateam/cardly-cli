@@ -3,6 +3,9 @@ import typer
 
 from cardly_cli.models.order import (
     SHIPPING_METHODS,
+    Order,
+    OrderAddress,
+    OrderItem,
     build_address,
     build_line,
     build_messages,
@@ -74,6 +77,24 @@ def test_build_messages_uses_page_key_not_name():
 
 def test_build_messages_empty_returns_none():
     assert build_messages([]) is None
+
+
+def test_build_messages_rejects_duplicate_page():
+    with pytest.raises(typer.BadParameter, match="Duplicate --message-page for page 1"):
+        build_messages([(1, "A"), (1, "B")])
+    with pytest.raises(typer.BadParameter, match="Duplicate --message-page for page 2"):
+        build_messages([(1, "A"), (2, "B"), (2, "C")])
+
+
+def test_build_messages_accepts_distinct_pages_and_sorts():
+    out = build_messages([(3, "Back"), (1, "Front"), (2, "Inside")])
+    assert out == {
+        "pages": [
+            {"page": 1, "text": "Front"},
+            {"page": 2, "text": "Inside"},
+            {"page": 3, "text": "Back"},
+        ]
+    }
 
 
 def test_shipping_methods_enum():
@@ -167,3 +188,54 @@ def test_build_line_merges_data_under_typed_flags():
     )
     assert line["artwork"] == "flag-wins"
     assert line["quantity"] == 9  # from --data, no typed override given
+
+
+def test_order_item_recipient_typed_as_order_address():
+    # Verify that OrderItem.recipient is typed with OrderAddress, not Any.
+    item_data = {
+        "id": "item-123",
+        "recipient": {
+            "firstName": "Jane",
+            "lastName": "Doe",
+            "address": "456 Oak St",
+            "city": "Sydney",
+            "country": "AU",
+            "unknownField": "extra_value",  # Should survive due to extra="allow"
+        },
+    }
+    item = OrderItem(**item_data)
+    assert item.recipient is not None
+    assert isinstance(item.recipient, OrderAddress)
+    assert item.recipient.firstName == "Jane"
+    assert item.recipient.city == "Sydney"
+    # Verify extra keys survive in the parsed model due to CardlyModel.extra="allow"
+    assert item.recipient.__pydantic_extra__["unknownField"] == "extra_value"
+
+
+def test_order_with_nested_recipient_preserves_extra_keys():
+    # Verify that a full Order response with nested items preserves extra keys
+    # in the recipient field, ensuring typed parsing doesn't lose data.
+    order_data = {
+        "id": "order-456",
+        "items": [
+            {
+                "id": "item-789",
+                "recipient": {
+                    "firstName": "Bob",
+                    "address": "789 Pine Rd",
+                    "city": "Brisbane",
+                    "country": "AU",
+                    "customField": "preserved",
+                },
+            }
+        ],
+    }
+    order = Order(**order_data)
+    assert order.items is not None
+    assert len(order.items) == 1
+    item = order.items[0]
+    assert item.recipient is not None
+    assert isinstance(item.recipient, OrderAddress)
+    assert item.recipient.firstName == "Bob"
+    # Extra key should be preserved
+    assert item.recipient.__pydantic_extra__["customField"] == "preserved"

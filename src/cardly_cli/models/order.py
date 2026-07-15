@@ -79,8 +79,8 @@ class OrderItem(CardlyModel):
     shipTo: Optional[Any] = None
     shipMethod: Optional[str] = None
     scheduledDate: Optional[str] = None
-    recipient: Optional[Any] = None
-    sender: Optional[Any] = None
+    recipient: Optional[OrderAddress] = None
+    sender: Optional[OrderAddress] = None
     delivery: Optional[Any] = None
     tracking: Optional[Any] = None
 
@@ -139,6 +139,15 @@ def build_messages(pages: list[tuple[int, str]]) -> dict[str, Any] | None:
     """
     if not pages:
         return None
+    # Reject duplicate page numbers to prevent ambiguous message bodies
+    page_numbers = [item[0] for item in pages]
+    seen = set()
+    for page_num in page_numbers:
+        if page_num in seen:
+            raise typer.BadParameter(
+                f"Duplicate --message-page for page {page_num}; each page may be given once."
+            )
+        seen.add(page_num)
     ordered = sorted(pages, key=lambda item: item[0])
     return {"pages": [{"page": number, "text": text} for number, text in ordered]}
 
