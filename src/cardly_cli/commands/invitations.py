@@ -99,6 +99,12 @@ def create(
         body["lastName"] = last_name
     if permission:
         body["permissions"] = permission
+    # Validate whatever ended up in body: both --permission flags and --data paths.
+    if "permissions" in body:
+        perms = body["permissions"]
+        if not isinstance(perms, list):
+            raise typer.BadParameter("permissions must be a list")
+        _check_permissions(perms)
     state.emit(Invitation.model_validate(state.client().post("invitations", json=body)))
 
 
@@ -124,6 +130,9 @@ def resend(
     else:
         result = client.post("invitations/resend", json={"email": email})
     state.warn(f"Resent invitation to {invitation_id or email}.")
+    # Deliberately unvalidated: this endpoint's response shape is UNVERIFIED and may
+    # be empty, so Invitation.model_validate() could raise on a successful resend.
+    # The warn() above is what the human actually needs.
     state.emit(result)
 
 

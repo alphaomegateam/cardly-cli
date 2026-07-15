@@ -203,3 +203,99 @@ def test_invitations_delete_declining_makes_no_request():
     )
     runner.invoke(app, ["invitations", "delete", "i1"], input="n\n", env=ENV)
     assert not route.called
+
+
+@respx.mock
+def test_invitations_create_data_permissions_validates_unknown_permission():
+    route = respx.post("https://api.card.ly/v2/invitations").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":["banana"]}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "banana" in result.stderr
+    assert not route.called
+
+
+@respx.mock
+def test_invitations_create_data_permissions_valid_no_flags():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"id": "i1"}))
+
+    respx.post("https://api.card.ly/v2/invitations").mock(side_effect=handler)
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":["orders"]}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    assert captured["body"]["permissions"] == ["orders"]
+
+
+@respx.mock
+def test_invitations_create_flags_override_data_permissions():
+    captured = {}
+
+    def handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=ok({"id": "i1"}))
+
+    respx.post("https://api.card.ly/v2/invitations").mock(side_effect=handler)
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":["orders"]}',
+            "--permission",
+            "billing",
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 0
+    assert captured["body"]["permissions"] == ["billing"]
+
+
+@respx.mock
+def test_invitations_create_data_permissions_must_be_list():
+    route = respx.post("https://api.card.ly/v2/invitations").mock(
+        return_value=httpx.Response(200, json=ok({}))
+    )
+    result = runner.invoke(
+        app,
+        [
+            "invitations",
+            "create",
+            "--email",
+            "a@x.com",
+            "--data",
+            '{"permissions":"orders"}',
+        ],
+        env=ENV,
+    )
+    assert result.exit_code == 2
+    assert "permissions must be a list" in result.stderr
+    assert not route.called
