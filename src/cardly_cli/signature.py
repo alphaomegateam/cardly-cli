@@ -30,6 +30,26 @@ def _compute_bytes(secret: str, timestamp: str, payload: bytes) -> str:
     return hashlib.md5(f"{secret}.{timestamp}.".encode() + payload).hexdigest()
 
 
+def _skip_string(text: str, index: int) -> int:
+    """Advance past a JSON string starting at text[index] == '"'.
+
+    Escaped characters (including escaped quotes) are skipped rather than
+    parsed. Returns the index just past the closing quote. Shared by every
+    string-content-skipping path so the depth-scanning and value-slicing
+    logic can never drift apart.
+    """
+    index += 1
+    length = len(text)
+    while index < length:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == '"':
+            return index + 1
+        index += 1
+    return index
+
+
 def extract_raw_property(raw: bytes, name: str) -> bytes | None:
     """Return the raw byte slice of a TOP-LEVEL property's value.
 
@@ -40,8 +60,20 @@ def extract_raw_property(raw: bytes, name: str) -> bytes | None:
     Depth-aware: a nested {"outer": {"data": ...}} must not be mistaken for the
     root "data". String contents (including braces and escaped quotes) are
     skipped rather than parsed.
+
+    Decoding is strict UTF-8: valid JSON must be valid UTF-8, so a decode
+    failure means a malformed body, and returning None here (rather than
+    silently mangling the slice via errors="replace") lets callers give an
+    honest diagnostic instead of a garbage hash.
+
+    Note on duplicate top-level keys: this is invalid JSON, but if it occurs
+    anyway, this raw-slice scan takes the FIRST occurrence while json.loads
+    takes the last. That's a deliberate first-wins convention here, not a bug.
     """
-    text = raw.decode("utf-8", errors="replace")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
     depth = 0
     index = 0
     length = len(text)
@@ -52,16 +84,8 @@ def extract_raw_property(raw: bytes, name: str) -> bytes | None:
 
         if char == '"':
             start = index
-            index += 1
-            while index < length:
-                if text[index] == "\\":
-                    index += 2
-                    continue
-                if text[index] == '"':
-                    break
-                index += 1
-            token = text[start : index + 1]
-            index += 1
+            index = _skip_string(text, index)
+            token = text[start:index]
             # Only a key at depth 1 (directly inside the root object) counts.
             if depth == 1 and token == target:
                 while index < length and text[index] in " \t\r\n":
@@ -87,20 +111,15 @@ def _slice_value(text: str, start: int) -> bytes | None:
     if start >= len(text):
         return None
     char = text[start]
+    length = len(text)
     if char in "{[":
         depth = 0
         index = start
-        while index < len(text):
+        while index < length:
             current = text[index]
             if current == '"':
-                index += 1
-                while index < len(text):
-                    if text[index] == "\\":
-                        index += 2
-                        continue
-                    if text[index] == '"':
-                        break
-                    index += 1
+                index = _skip_string(text, index)
+                continue
             elif current in "{[":
                 depth += 1
             elif current in "}]":
@@ -109,9 +128,13 @@ def _slice_value(text: str, start: int) -> bytes | None:
                     return text[start : index + 1].encode()
             index += 1
         return None
-    # Scalar: run to the next delimiter.
+    # Scalar: run to the next delimiter, skipping over string content so a
+    # comma/brace/bracket INSIDE a string scalar doesn't truncate the slice.
     index = start
-    while index < len(text) and text[index] not in ",}]":
+    while index < length and text[index] not in ",}]":
+        if text[index] == '"':
+            index = _skip_string(text, index)
+            continue
         index += 1
     return text[start:index].strip().encode()
 
@@ -159,6 +182,15 @@ def verify(
     if not secret:
         return VerifyResult(False, None, tried, "No secret supplied.")
 
+    # Checked up front (independent of json.loads, which would raise and be
+    # swallowed below) so a decode failure gets its own honest diagnostic
+    # rather than being folded into the generic "no signature material" text.
+    try:
+        raw_body.decode("utf-8", errors="strict")
+        body_is_utf8 = True
+    except UnicodeDecodeError:
+        body_is_utf8 = False
+
     # Scheme A: timestamp + data from the BODY, matched against body.signatures.
     try:
         body = json.loads(raw_body)
@@ -166,10 +198,13 @@ def verify(
         body = None
 
     if isinstance(body, dict) and "signatures" in body and "timestamp" in body:
-        tried.append(SCHEME_BODY)
         raw_data = extract_raw_property(raw_body, "data")
         if raw_data is not None:
             digest = _compute_bytes(secret, str(body["timestamp"]), raw_data)
+            # Only recorded as "tried" once a digest has genuinely been
+            # computed — a shape that merely looks eligible (e.g. missing
+            # `data`) must never be reported as an attempted comparison.
+            tried.append(SCHEME_BODY)
             if _matches_any(body.get("signatures"), digest):
                 return VerifyResult(True, SCHEME_BODY, tried)
 
@@ -179,21 +214,27 @@ def verify(
         timestamp = _header(headers, "Cardly-Timestamp")
         raw_signatures = _header(headers, "Cardly-Signatures")
         if timestamp and raw_signatures:
-            tried.append(SCHEME_HEADER)
             try:
                 candidates = json.loads(raw_signatures)
             except (ValueError, TypeError):
                 candidates = raw_signatures
             digest = _compute_bytes(secret, timestamp, raw_body)
+            tried.append(SCHEME_HEADER)
             if _matches_any(candidates, digest):
                 return VerifyResult(True, SCHEME_HEADER, tried)
 
     if not tried:
-        reason = (
-            "No signature material found. Expected either a body with "
-            "`timestamp`/`data`/`signatures`, or Cardly-Timestamp and "
-            "Cardly-Signatures headers."
-        )
+        if not body_is_utf8:
+            reason = (
+                "Body is not valid UTF-8 and could not be decoded, so no signature "
+                "material could be extracted from it."
+            )
+        else:
+            reason = (
+                "No signature material found. Expected either a body with "
+                "`timestamp`/`data`/`signatures`, or Cardly-Timestamp and "
+                "Cardly-Signatures headers."
+            )
     else:
         reason = (
             f"No signature matched. Tried: {', '.join(tried)}. Cardly documents "

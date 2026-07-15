@@ -54,6 +54,29 @@ def test_extract_raw_property_missing_returns_none():
 def test_extract_raw_property_non_object_value():
     assert extract_raw_property(b'{"data":[1,2]}', "data") == b"[1,2]"
     assert extract_raw_property(b'{"data":true}', "data") == b"true"
+    assert extract_raw_property(b'{"data":123}', "data") == b"123"
+
+
+def test_extract_raw_property_scalar_string_with_comma_and_brace_not_truncated():
+    # CRITICAL regression: a scalar string containing "," or "}" must not
+    # truncate the slice. The old scalar branch had no string-skipping logic.
+    assert extract_raw_property(b'{"data":"a,b}c"}', "data") == b'"a,b}c"'
+
+
+def test_extract_raw_property_scalar_string_with_bracket_not_truncated():
+    assert extract_raw_property(b'{"data":"a]b"}', "data") == b'"a]b"'
+
+
+def test_extract_raw_property_scalar_string_with_escaped_quote_not_truncated():
+    raw = rb'{"data":"say \"hi\", ok"}'
+    assert extract_raw_property(raw, "data") == rb'"say \"hi\", ok"'
+
+
+def test_extract_raw_property_invalid_utf8_returns_none():
+    # Strict decoding: an undecodable body must return None rather than
+    # silently mangling the slice via errors="replace".
+    raw = b'{"data":{"note":"\xff\xfe bad","a":1}}'
+    assert extract_raw_property(raw, "data") is None
 
 
 def _scheme_a_body(secret="s3cret", timestamp="1700000000", data=None):
@@ -143,6 +166,33 @@ def test_verify_fails_closed_on_unparseable_body():
 def test_verify_fails_closed_on_empty_secret():
     raw, _ = _scheme_a_body()
     assert not verify(raw, "").matched
+
+
+def test_verify_tried_excludes_body_scheme_when_data_missing():
+    # IMPORTANT: shape looked eligible (signatures + timestamp present) but
+    # `data` is absent, so no digest was ever computed for this scheme — it
+    # must not be reported as "tried".
+    raw = b'{"signatures":["x"],"timestamp":"1"}'
+    result = verify(raw, "secret")
+    assert result.tried == []
+    assert not result.matched
+    assert "no signature material" in result.reason.lower()
+
+
+def test_verify_tried_includes_body_scheme_when_digest_computed_wrong_secret():
+    raw, _ = _scheme_a_body()
+    result = verify(raw, "wrong-secret")
+    assert result.tried == ["body-signatures"]
+    assert not result.matched
+
+
+def test_verify_fails_closed_on_invalid_utf8_body_with_clear_reason():
+    raw = b'{"data":{"note":"\xff\xfe bad","a":1}}'
+    result = verify(raw, "secret")
+    assert result.matched is False
+    assert result.reason is not None
+    reason_lower = result.reason.lower()
+    assert "utf-8" in reason_lower or "decode" in reason_lower
 
 
 def test_verify_uses_raw_slice_not_reserialized_data():
