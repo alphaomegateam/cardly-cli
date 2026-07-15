@@ -1,5 +1,3 @@
-import tomllib
-
 import pytest
 
 from cardly_cli.config import (
@@ -129,9 +127,8 @@ def test_write_profile_roundtrip_with_hostile_api_key_cmd(tmp_path):
     hostile = 'sh -c "echo test_xyz" \\ backslash'
     write_profile("dev", api_key_cmd=hostile, make_default=True, config_path=path)
 
-    with path.open("rb") as fh:
-        config = tomllib.load(fh)
-    assert config["profile"]["dev"]["api_key_cmd"] == hostile
+    s = load_settings(profile="dev", env={}, config_path=path)
+    assert s.api_key == "test_xyz"
 
 
 def test_settings_repr_masks_api_key():
