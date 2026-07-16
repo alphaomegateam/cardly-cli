@@ -1,6 +1,6 @@
 [project]
 name = "cardly-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Unofficial command-line interface for the Cardly physical card sending API"
 readme = "README.md"
 license = { text = "MIT" }
