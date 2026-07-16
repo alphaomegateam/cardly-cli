@@ -46,6 +46,7 @@ def paginate(
     base_params = dict(params or {})
     offset = 0
     seen_signature: str | None = None
+    yielded = 0
 
     while True:
         page_params = dict(base_params)
@@ -64,6 +65,16 @@ def paginate(
         # false-positive and silently drop real records.
         signature = repr(results)
         if signature == seen_signature:
+            if warn:
+                total = total_records(data)
+                warn(
+                    f"{endpoint} returned an identical page for offset={offset}, so it "
+                    f"appears to ignore `offset`. Stopping after {yielded} record(s) to "
+                    f"avoid an endless loop — the result may be INCOMPLETE"
+                    + (f" (the API reports {total} total)" if total is not None else "")
+                    + ". Cardly does not declare limit/offset on its list endpoints; try a "
+                    "larger --limit to fetch more in one page."
+                )
             return
         seen_signature = signature
 
@@ -77,6 +88,7 @@ def paginate(
                 )
 
         yield from results
+        yielded += len(results)
 
         # Advance by what we RECEIVED, never by what we asked for. If the
         # server clamps `limit`, advancing by the request skips the difference

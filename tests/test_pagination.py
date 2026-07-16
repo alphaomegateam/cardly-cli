@@ -108,6 +108,71 @@ def test_stops_when_endpoint_ignores_offset():
 
 
 @respx.mock
+def test_stalled_offset_warns_with_total():
+    # Endpoint ignores `offset` and keeps returning page 1. The stall guard
+    # must stop the loop AND tell the caller the result may be incomplete,
+    # including the reported total when the API supplies one.
+    warnings = []
+    respx.get("https://api.card.ly/v2/media").mock(
+        return_value=httpx.Response(200, json=page([{"id": 1}], total=250, limit=1, offset=0))
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        items = list(paginate(c, "media", limit=1, warn=warnings.append))
+    assert items == [{"id": 1}]
+    assert any("INCOMPLETE" in w and "250" in w for w in warnings)
+
+
+@respx.mock
+def test_stalled_offset_warns_without_fabricating_total():
+    # Same stall, but the API doesn't report totalRecords. The warning must
+    # not invent a number.
+    warnings = []
+    respx.get("https://api.card.ly/v2/media").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "state": {"status": "OK"},
+                "data": {"meta": {"limit": 1, "offset": 0}, "results": [{"id": 1}]},
+            },
+        )
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        items = list(paginate(c, "media", limit=1, warn=warnings.append))
+    assert items == [{"id": 1}]
+    assert len(warnings) == 1
+    assert "INCOMPLETE" in warnings[0]
+    assert "total" not in warnings[0].lower()
+
+
+@respx.mock
+def test_healthy_multi_page_walk_emits_no_stall_warning():
+    # Regression guard: normal pagination (offset honoured) must never trigger
+    # the stall warning.
+    warnings = []
+    responses = [
+        httpx.Response(200, json=page([{"id": 1}, {"id": 2}], total=3, limit=2, offset=0)),
+        httpx.Response(200, json=page([{"id": 3}], total=3, limit=2, offset=2)),
+    ]
+    respx.get("https://api.card.ly/v2/orders").mock(side_effect=responses)
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        items = list(paginate(c, "orders", limit=2, warn=warnings.append))
+    assert items == [{"id": 1}, {"id": 2}, {"id": 3}]
+    assert warnings == []
+
+
+@respx.mock
+def test_single_page_emits_no_stall_warning():
+    warnings = []
+    respx.get("https://api.card.ly/v2/webhooks").mock(
+        return_value=httpx.Response(200, json=page([{"id": 1}, {"id": 2}], total=2))
+    )
+    with CardlyClient(SETTINGS, retry=NO_RETRY) as c:
+        items = list(paginate(c, "webhooks", warn=warnings.append))
+    assert items == [{"id": 1}, {"id": 2}]
+    assert warnings == []
+
+
+@respx.mock
 def test_false_positive_regression_different_pages_same_length_and_first_element():
     # Regression: old signature matched on (len(results), repr(results[0])) only.
     # Two genuinely different consecutive pages that share the same length and

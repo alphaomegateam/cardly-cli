@@ -177,12 +177,21 @@ the live API. Passing CI must not be read as having checked any of these:
   both cite the same worked example, so the example can't discriminate between them,
   and neither has been validated against a real postback. `webhooks verify` tries
   both and reports which matched.
-- **Pagination on `/contact-lists`, `/contact-lists/{id}/contacts`, `/webhooks`,
-  `/users`, and `/invitations`.** `limit`/`offset` are documented in prose but
-  declared on no list endpoint in Cardly's OpenAPI spec — `GET /users` declares no
-  query parameters at all. We send them anyway and page defensively — advancing by
-  the returned page size, warning if the server clamps `limit`, and stopping if an
-  endpoint appears to ignore `offset`.
+- **Pagination.** `limit`/`offset` are documented in prose but declared on no list
+  endpoint in Cardly's OpenAPI spec — `GET /users` declares no query parameters at
+  all. Live testing against a real sandbox key (2026-07-15) measured actual behaviour
+  on `GET /media`: `limit` **is** honoured, with a floor of 5 (asking for 1–5 returns
+  5; asking for 6 returns 6; asking for 100 returns everything up to the account
+  total). `offset`, however, **is ignored** — `limit=5&offset=5` returns records 1–5
+  again, and `meta.offset` comes back `0` regardless of what was requested. That
+  means `--all` cannot page past the first page on an endpoint that ignores `offset`
+  once the account has more records than `--limit`. The CLI detects this (an
+  identical page repeating) and **warns** rather than silently truncating, telling
+  you the result may be incomplete and to raise `--limit` to fetch more in one page.
+  It also still warns if the server clamps `limit` down. What remains genuinely
+  unverified: whether `offset` is ignored on every list endpoint (`/contact-lists`,
+  `/contact-lists/{id}/contacts`, `/webhooks`, `/users`, `/invitations`, etc.) or only
+  some — only `/media` was tested with enough records on the account to tell.
 - **Whether credit-history accepts date-only filters.** We pad to midnight rather
   than find out in production.
 - **Rate limits.** A 429 exists; no numbers and no `RateLimit-*` headers are
