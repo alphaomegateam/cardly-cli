@@ -10,7 +10,7 @@ SETTINGS = CardlySettings(api_key="k", base_url="https://api.card.ly/v2")
 NO_RETRY = RetryPolicy(enabled=False)
 
 
-def page(results, *, total, limit=100, offset=0):
+def page(results, *, total, limit=DEFAULT_LIMIT, offset=0):
     return {
         "state": {"status": "OK", "messages": [], "version": 1},
         "data": {
@@ -21,7 +21,7 @@ def page(results, *, total, limit=100, offset=0):
 
 
 def test_default_limit():
-    assert DEFAULT_LIMIT == 100
+    assert DEFAULT_LIMIT == 250
 
 
 def test_extract_results_and_total():

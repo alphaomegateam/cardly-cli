@@ -4,9 +4,12 @@ from typing import Any, Callable, Iterator
 
 from cardly_cli.client import CardlyClient
 
-# The documented default is 25; we ask for more to cut round trips. See the
-# clamp cross-check below for why asking is not the same as receiving.
-DEFAULT_LIMIT = 100
+# Measured 2026-07-15 against api.card.ly with a real sandbox key: `limit` is
+# honoured but clamped server-side to a floor of 5 (asking for 1-5 all return
+# 5) and a ceiling of 250 (asking for 251-300 all return 250; meta.limit
+# echoes the clamped value). 250 is the server's actual maximum for a single
+# page, so defaulting lower would needlessly truncate every listing.
+DEFAULT_LIMIT = 250
 
 
 def extract_results(data: Any) -> list:
@@ -38,10 +41,13 @@ def paginate(
 ) -> Iterator[Any]:
     """Walk a Cardly list endpoint via offset/limit.
 
-    NOTE: `limit`/`offset` are documented in the API's prose but are NOT
-    declared as parameters on any list endpoint in the OpenAPI spec, and remain
-    unverified against /contact-lists, /contact-lists/{id}/contacts and
-    /webhooks. Everything defensive below follows from that uncertainty.
+    NOTE: measured 2026-07-15 against a real sandbox key: `limit` is honoured
+    (floor 5, ceiling 250) but `offset` is ignored on every endpoint tested
+    with enough records to tell (/media, /fonts, /doodles) — the server
+    always returns page 1. That means no more than 250 records can ever be
+    retrieved from a Cardly list endpoint; `--all` cannot page past the
+    ceiling once an account has more than 250 of something. Everything
+    defensive below follows from that.
     """
     base_params = dict(params or {})
     offset = 0

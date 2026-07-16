@@ -144,6 +144,32 @@ what a bodyless call to that endpoint does, and it could mean "delete every cont
 in the list." The CLI refuses to guess. `cardly api DELETE contact-lists/<id>/contacts`
 remains the escape hatch if you need to call it bodyless anyway.
 
+## Pagination and the 250-record ceiling
+
+Verified against the live API (api.card.ly, 2026-07-15, real sandbox key):
+
+- `limit` **is honoured**, clamped on both ends: a floor of **5** (asking for
+  1–5 all return 5 records) and a ceiling of **250** (asking for 251+ all
+  return 250; `meta.limit` echoes the clamped value).
+- `offset` **is ignored** on every endpoint that had enough records to test it
+  against — `/media` (6 records), `/fonts` (71), `/doodles` (443) all returned
+  `meta.offset: 0` and the same first record no matter what offset was
+  requested. This was tested on 3 different endpoints, not just one.
+
+The consequence: because `offset` does nothing and `limit` tops out at 250,
+**no more than 250 records can be retrieved from any Cardly list endpoint.**
+The sandbox account used for testing has 443 doodles; 250 is the most that
+can ever come back. `--all` cannot work around this — there is no second page
+to request. If you have more than 250 of something, your listing is
+truncated, and this CLI has no way to fetch the rest.
+
+To see how many you're actually missing, use the raw envelope, which includes
+`meta.totalRecords`:
+
+```bash
+cardly api GET doodles -p limit=250
+```
+
 ## Verifying webhook postbacks
 
 ```bash
@@ -177,21 +203,19 @@ the live API. Passing CI must not be read as having checked any of these:
   both cite the same worked example, so the example can't discriminate between them,
   and neither has been validated against a real postback. `webhooks verify` tries
   both and reports which matched.
-- **Pagination.** `limit`/`offset` are documented in prose but declared on no list
-  endpoint in Cardly's OpenAPI spec — `GET /users` declares no query parameters at
-  all. Live testing against a real sandbox key (2026-07-15) measured actual behaviour
-  on `GET /media`: `limit` **is** honoured, with a floor of 5 (asking for 1–5 returns
-  5; asking for 6 returns 6; asking for 100 returns everything up to the account
-  total). `offset`, however, **is ignored** — `limit=5&offset=5` returns records 1–5
-  again, and `meta.offset` comes back `0` regardless of what was requested. That
-  means `--all` cannot page past the first page on an endpoint that ignores `offset`
-  once the account has more records than `--limit`. The CLI detects this (an
-  identical page repeating) and **warns** rather than silently truncating, telling
-  you the result may be incomplete and to raise `--limit` to fetch more in one page.
-  It also still warns if the server clamps `limit` down. What remains genuinely
-  unverified: whether `offset` is ignored on every list endpoint (`/contact-lists`,
-  `/contact-lists/{id}/contacts`, `/webhooks`, `/users`, `/invitations`, etc.) or only
-  some — only `/media` was tested with enough records on the account to tell.
+- **Pagination beyond what's below.** Live testing against a real sandbox key
+  (2026-07-15) verified `limit`/`offset` behaviour directly — see "Pagination and
+  the 250-record ceiling" above for what's now known. What remains genuinely
+  unverified:
+  - Whether `offset` is ignored on the endpoints that had too few records to test
+    it against (`/contact-lists`, `/contact-lists/{id}/contacts`, `/webhooks`,
+    `/users`, `/invitations`, `/orders`, `/templates`, `/writing-styles`, `/art`).
+    It's **likely** universal — 3 of 3 endpoints with enough records
+    (`/media`, `/fonts`, `/doodles`) ignored it — but a behaviour that holds on 3
+    endpoints isn't proven to hold on all 12.
+  - Whether the floor of 5 and ceiling of 250 are global constants or set
+    per-endpoint. Only `/doodles` and `/media` were actually measured at both
+    ends of the range.
 - **Whether credit-history accepts date-only filters.** We pad to midnight rather
   than find out in production.
 - **Rate limits.** A 429 exists; no numbers and no `RateLimit-*` headers are
