@@ -46,7 +46,7 @@ def list_webhooks(
     state = ctx.obj
     client = state.client()
     if all_pages:
-        items = list(paginate(client, "webhooks", limit=limit, warn=state.warn))
+        items = list(paginate(client, "webhooks", limit=limit))
     else:
         items = extract_results(client.get("webhooks", params={"limit": limit}))
     state.emit([Webhook.model_validate(i) for i in items], columns=LIST_COLUMNS)

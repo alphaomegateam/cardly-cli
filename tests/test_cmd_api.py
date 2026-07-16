@@ -66,10 +66,22 @@ def test_api_post_carries_idempotency_key():
 def test_api_all_paginates():
     responses = [
         httpx.Response(
-            200, json=ok({"meta": {"totalRecords": 2, "limit": 1}, "results": [{"id": 1}]})
+            200,
+            json=ok(
+                {
+                    "meta": {"totalRecords": 2, "limit": 1, "page": 1, "lastRecord": 1},
+                    "results": [{"id": 1}],
+                }
+            ),
         ),
         httpx.Response(
-            200, json=ok({"meta": {"totalRecords": 2, "limit": 1}, "results": [{"id": 2}]})
+            200,
+            json=ok(
+                {
+                    "meta": {"totalRecords": 2, "limit": 1, "page": 2, "lastRecord": 2},
+                    "results": [{"id": 2}],
+                }
+            ),
         ),
     ]
     respx.get("https://api.card.ly/v2/orders").mock(side_effect=responses)

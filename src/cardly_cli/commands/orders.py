@@ -433,7 +433,7 @@ def list_orders(
     state = ctx.obj
     client = state.client()
     if all_pages:
-        items = list(paginate(client, "orders", limit=limit, warn=state.warn))
+        items = list(paginate(client, "orders", limit=limit))
     else:
         items = extract_results(client.get("orders", params={"limit": limit}))
     rows = [Order.model_validate(i) for i in apply_filters(items, filter_)]

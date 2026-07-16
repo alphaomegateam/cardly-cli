@@ -237,7 +237,7 @@ def list_contacts(
     endpoint = f"contact-lists/{list_id}/contacts"
     client = state.client()
     if all_pages:
-        items = list(paginate(client, endpoint, limit=limit, warn=state.warn))
+        items = list(paginate(client, endpoint, limit=limit))
     else:
         items = extract_results(client.get(endpoint, params={"limit": limit}))
     rows = [Contact.model_validate(i) for i in apply_filters(items, filter_)]

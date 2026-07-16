@@ -144,30 +144,42 @@ what a bodyless call to that endpoint does, and it could mean "delete every cont
 in the list." The CLI refuses to guess. `cardly api DELETE contact-lists/<id>/contacts`
 remains the escape hatch if you need to call it bodyless anyway.
 
-## Pagination and the 250-record ceiling
+## Pagination
 
 Verified against the live API (api.card.ly, 2026-07-15, real sandbox key):
 
 - `limit` **is honoured**, clamped on both ends: a floor of **5** (asking for
   1–5 all return 5 records) and a ceiling of **250** (asking for 251+ all
   return 250; `meta.limit` echoes the clamped value).
-- `offset` **is ignored** on every endpoint that had enough records to test it
-  against — `/media` (6 records), `/fonts` (71), `/doodles` (443) all returned
-  `meta.offset: 0` and the same first record no matter what offset was
-  requested. This was tested on 3 different endpoints, not just one.
+- Cardly paginates by **`page`**, not `offset`. `offset` is a *response*
+  field only (`meta.offset`, computed server-side as `(page-1) * limit`) —
+  sending it as a request parameter does nothing. `GET /v2/doodles?limit=5&page=2`
+  returns records 6–10; `GET /v2/doodles?limit=5&offset=5` returns records
+  1–5 again (page 1, offset ignored entirely). Walking `page=1..5` against a
+  443-record `/doodles` list retrieved all 443 unique records with no
+  duplicates.
 
-The consequence: because `offset` does nothing and `limit` tops out at 250,
-**no more than 250 records can be retrieved from any Cardly list endpoint.**
-The sandbox account used for testing has 443 doodles; 250 is the most that
-can ever come back. `--all` cannot work around this — there is no second page
-to request. If you have more than 250 of something, your listing is
-truncated, and this CLI has no way to fetch the rest.
+`--all` walks pages (`page=1, 2, 3, ...`) until the API reports
+`meta.lastRecord >= meta.totalRecords`, a page comes back short of the
+requested `limit`, or a page comes back empty — so it retrieves everything,
+not just the first page. 250 is the max **page size**, not a cap on how many
+records can be retrieved in total.
 
-To see how many you're actually missing, use the raw envelope, which includes
+**Cardly's own documentation is wrong here.** It states that list endpoints
+"accept limit and offset" and instructs you to "increase the offset
+parameter by the limit value" to walk pages, with a worked example
+(`GET /v2/art?limit=10&offset=20`). That example does not work against the
+live API — `offset` is silently ignored as a request parameter. This CLI
+follows the API's actual behaviour (`page`), not the documented one. If a
+future change reverts this back to `offset` because the docs say so, `--all`
+will silently go back to returning only the first page.
+
+To inspect the raw pagination metadata for any endpoint, use the raw
+envelope, which includes `meta.page`, `meta.lastRecord`, and
 `meta.totalRecords`:
 
 ```bash
-cardly api GET doodles -p limit=250
+cardly api GET doodles -p limit=250 -p page=1
 ```
 
 ## Verifying webhook postbacks
@@ -204,15 +216,14 @@ the live API. Passing CI must not be read as having checked any of these:
   and neither has been validated against a real postback. `webhooks verify` tries
   both and reports which matched.
 - **Pagination beyond what's below.** Live testing against a real sandbox key
-  (2026-07-15) verified `limit`/`offset` behaviour directly — see "Pagination and
-  the 250-record ceiling" above for what's now known. What remains genuinely
-  unverified:
-  - Whether `offset` is ignored on the endpoints that had too few records to test
-    it against (`/contact-lists`, `/contact-lists/{id}/contacts`, `/webhooks`,
-    `/users`, `/invitations`, `/orders`, `/templates`, `/writing-styles`, `/art`).
-    It's **likely** universal — 3 of 3 endpoints with enough records
-    (`/media`, `/fonts`, `/doodles`) ignored it — but a behaviour that holds on 3
-    endpoints isn't proven to hold on all 12.
+  (2026-07-15) verified `limit`/`page` behaviour directly — see "Pagination"
+  above for what's now known. What remains genuinely untested (too few
+  records to exercise a second page): `/contact-lists`,
+  `/contact-lists/{id}/contacts`, `/webhooks`, `/users`, `/invitations`,
+  `/orders`, `/templates`, `/writing-styles`, `/art`. Page-based paging is
+  expected to hold on these too — it's the API's documented mechanism, just
+  not the one the docs describe correctly — but it hasn't been exercised
+  against a real multi-page response for them.
   - Whether the floor of 5 and ceiling of 250 are global constants or set
     per-endpoint. Only `/doodles` and `/media` were actually measured at both
     ends of the range.

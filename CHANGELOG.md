@@ -4,21 +4,37 @@
 
 ### Fixed
 
-- `paginate()` now detects when a list endpoint ignores `offset` (an identical
-  page repeating) and warns that the result may be incomplete, instead of
-  looping until Cardly rate-limits the client or silently under-returning.
+- **`--all` was only ever returning the first page of any list endpoint,
+  silently.** `paginate()` walked pages by sending `limit` + `offset`, per
+  Cardly's documentation — but Cardly does not paginate by `offset`; it
+  paginates by `page`. `offset` is a response-only field and is silently
+  ignored as a request parameter, so every "next page" request was
+  identical to the first and `--all` just re-fetched page 1 forever.
+  `paginate()` now sends `page` (starting at 1, incrementing by 1) and
+  terminates on an empty page, `meta.lastRecord >= meta.totalRecords`, or a
+  page shorter than the requested `limit`. Verified live 2026-07-15: walking
+  `page=1..5` against a 443-record `/doodles` list retrieves all 443 unique
+  records.
+- Simplified `paginate()` accordingly: the old offset-stall guard and
+  clamp-mismatch warning existed only to cope with the `offset` bug (pages
+  repeating forever) and are no longer needed with real termination
+  conditions — removed, along with the `warn` parameter and every call
+  site's `warn=state.warn`.
 
 ### Changed
 
 - Raised `DEFAULT_LIMIT` from 100 to **250**. Live testing against the real
   Cardly API (2026-07-15, real sandbox key) measured `limit` clamped to a
-  floor of 5 and a ceiling of 250, so 250 is the server's actual per-page
-  maximum — defaulting lower needlessly truncated every listing.
-- Documented, with measured evidence, that `offset` is ignored on every
-  Cardly list endpoint tested with enough records to tell (`/media`,
-  `/fonts`, `/doodles` — 3 of 3), and that combined with the 250 ceiling on
-  `limit`, **no more than 250 records can ever be retrieved from a single
-  Cardly list endpoint** — `--all` cannot page past that.
+  floor of 5 and a ceiling of 250 per page, so 250 minimises round trips —
+  it is the max **page size**, not a cap on total records retrievable. The
+  clamp is harmless under page-based paging: a smaller-than-requested page
+  just means the walk takes more pages.
+- Documented that **Cardly's own documentation is wrong about pagination**:
+  it says list endpoints "accept limit and offset" and instructs walking
+  pages by increasing `offset`, with a worked example that does not work
+  against the live API. We now follow the API's actual behaviour (`page`)
+  instead of the documented one, with a note in both the README and
+  `pagination.py` warning against reverting this.
 
 ## [0.2.0] — 2026-07-15
 

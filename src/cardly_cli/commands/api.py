@@ -41,7 +41,7 @@ def api_command(
         if method.upper() != "GET":
             raise typer.BadParameter("--all only supports GET (pagination is GET-only).")
         client = state.client()
-        state.emit(list(paginate(client, path, params=params, limit=limit, warn=state.warn)))
+        state.emit(list(paginate(client, path, params=params, limit=limit)))
         return
 
     client = state.client()

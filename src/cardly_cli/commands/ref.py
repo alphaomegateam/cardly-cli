@@ -21,7 +21,7 @@ def _fetch(
     state = ctx.obj
     client = state.client()
     if all_pages:
-        items = list(paginate(client, endpoint, params=params, limit=limit, warn=state.warn))
+        items = list(paginate(client, endpoint, params=params, limit=limit))
     else:
         items = extract_results(client.get(endpoint, params={**params, "limit": limit}))
     state.emit(items, columns=COLUMNS)

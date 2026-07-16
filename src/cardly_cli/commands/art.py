@@ -48,7 +48,7 @@ def list_art(
     params = {"ownOnly": "true"} if own_only else {}
     client = state.client()
     if all_pages:
-        items = list(paginate(client, "art", params=params, limit=limit, warn=state.warn))
+        items = list(paginate(client, "art", params=params, limit=limit))
     else:
         items = extract_results(client.get("art", params={**params, "limit": limit}))
     state.emit([Art.model_validate(i) for i in items], columns=LIST_COLUMNS)

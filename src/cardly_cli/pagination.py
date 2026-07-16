@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 from cardly_cli.client import CardlyClient
 
@@ -8,7 +8,25 @@ from cardly_cli.client import CardlyClient
 # honoured but clamped server-side to a floor of 5 (asking for 1-5 all return
 # 5) and a ceiling of 250 (asking for 251-300 all return 250; meta.limit
 # echoes the clamped value). 250 is the server's actual maximum for a single
-# page, so defaulting lower would needlessly truncate every listing.
+# page, so defaulting lower would needlessly truncate every listing. The
+# clamp is harmless for pagination: if a page comes back smaller than
+# requested, the walk below just takes more pages.
+#
+# Pagination itself is by `page`, NOT `offset`. CARDLY'S OWN DOCUMENTATION IS
+# WRONG ABOUT THIS: it states that list endpoints "accept limit and offset"
+# and instructs you to "increase the offset parameter by the limit value" to
+# walk pages, with a worked example (`?limit=10&offset=20`). That documented
+# contract does not work — `offset` is a RESPONSE field only (computed
+# server-side as `(page-1) * limit`) and is silently ignored as a request
+# parameter. `page` is what actually advances the result set. Verified live
+# 2026-07-15: `?limit=5&page=2` returns records 6-10; the equivalent
+# `?limit=5&offset=5` returns records 1-5 again (page 1, offset ignored
+# entirely). Walking `page=1..5` against a 443-record /doodles list
+# retrieved all 443 unique records, no duplicates.
+#
+# DO NOT "fix" this back to offset-based paging because Cardly's docs say
+# so — the docs are wrong, and doing so will silently reintroduce the bug
+# where `--all` only ever returned the first page.
 DEFAULT_LIMIT = 250
 
 
@@ -31,76 +49,49 @@ def total_records(data: Any) -> int | None:
     return None
 
 
+def _last_record(data: Any) -> int | None:
+    if not isinstance(data, dict):
+        return None
+    meta = data.get("meta")
+    if isinstance(meta, dict) and isinstance(meta.get("lastRecord"), int):
+        return meta["lastRecord"]
+    return None
+
+
 def paginate(
     client: CardlyClient,
     endpoint: str,
     *,
     params: dict[str, Any] | None = None,
     limit: int = DEFAULT_LIMIT,
-    warn: Callable[[str], None] | None = None,
 ) -> Iterator[Any]:
-    """Walk a Cardly list endpoint via offset/limit.
+    """Walk a Cardly list endpoint by `page` (not `offset` — see module comment).
 
-    NOTE: measured 2026-07-15 against a real sandbox key: `limit` is honoured
-    (floor 5, ceiling 250) but `offset` is ignored on every endpoint tested
-    with enough records to tell (/media, /fonts, /doodles) — the server
-    always returns page 1. That means no more than 250 records can ever be
-    retrieved from a Cardly list endpoint; `--all` cannot page past the
-    ceiling once an account has more than 250 of something. Everything
-    defensive below follows from that.
+    Sends `page=1, 2, 3, ...` with `limit` on every request. Stops when a
+    page comes back empty, when `meta.lastRecord >= meta.totalRecords`, or
+    when a page comes back shorter than the requested `limit`.
     """
     base_params = dict(params or {})
-    offset = 0
-    seen_signature: str | None = None
-    yielded = 0
+    page = 1
 
     while True:
         page_params = dict(base_params)
         page_params["limit"] = limit
-        page_params["offset"] = offset
+        page_params["page"] = page
         data = client.get(endpoint, params=page_params)
         results = extract_results(data)
 
         if not results:
             return
 
-        # Guard: an endpoint that ignores `offset` returns page 1 forever.
-        # Without this we loop until Cardly rate-limits us (429). Compare the
-        # FULL page: a true stall returns a byte-identical page, while two
-        # legitimately different pages differ somewhere — so this cannot
-        # false-positive and silently drop real records.
-        signature = repr(results)
-        if signature == seen_signature:
-            if warn:
-                total = total_records(data)
-                warn(
-                    f"{endpoint} returned an identical page for offset={offset}, so it "
-                    f"appears to ignore `offset`. Stopping after {yielded} record(s) to "
-                    f"avoid an endless loop — the result may be INCOMPLETE"
-                    + (f" (the API reports {total} total)" if total is not None else "")
-                    + ". Cardly does not declare limit/offset on its list endpoints; try a "
-                    "larger --limit to fetch more in one page."
-                )
-            return
-        seen_signature = signature
-
-        meta = data.get("meta") if isinstance(data, dict) else None
-        if warn and isinstance(meta, dict):
-            served = meta.get("limit")
-            if isinstance(served, int) and served != limit:
-                warn(
-                    f"Cardly clamped limit {limit} to {served} on {endpoint}; "
-                    f"paging by the returned page size."
-                )
-
         yield from results
-        yielded += len(results)
-
-        # Advance by what we RECEIVED, never by what we asked for. If the
-        # server clamps `limit`, advancing by the request skips the difference
-        # silently (ask 100, get 25, jump 100 -> records 26-100 vanish).
-        offset += len(results)
 
         total = total_records(data)
-        if total is not None and offset >= total:
+        last_record = _last_record(data)
+        if total is not None and last_record is not None and last_record >= total:
             return
+
+        if len(results) < limit:
+            return
+
+        page += 1

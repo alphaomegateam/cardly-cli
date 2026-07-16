@@ -22,7 +22,7 @@ def list_users(
     state = ctx.obj
     client = state.client()
     if all_pages:
-        items = list(paginate(client, "users", limit=limit, warn=state.warn))
+        items = list(paginate(client, "users", limit=limit))
     else:
         items = extract_results(client.get("users", params={"limit": limit}))
     state.emit([User.model_validate(i) for i in items], columns=LIST_COLUMNS)

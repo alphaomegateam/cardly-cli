@@ -56,7 +56,7 @@ def _history(ctx: typer.Context, endpoint: str, all_pages: bool, limit: int, **t
     params = _time_params(**times)
     client = state.client()
     if all_pages:
-        items = list(paginate(client, endpoint, params=params, limit=limit, warn=state.warn))
+        items = list(paginate(client, endpoint, params=params, limit=limit))
     else:
         params["limit"] = limit
         items = extract_results(client.get(endpoint, params=params))
